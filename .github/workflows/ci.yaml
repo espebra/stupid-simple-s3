@@ -105,10 +105,10 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: sss-linux-amd64
-          path: bin/sss-linux-amd64
+          name: stupid-simple-s3-linux-amd64
+          path: bin/stupid-simple-s3-linux-amd64
 
       - uses: actions/upload-artifact@v4
         with:
-          name: sss-linux-arm64
-          path: bin/sss-linux-arm64
+          name: stupid-simple-s3-linux-arm64
+          path: bin/stupid-simple-s3-linux-arm64
