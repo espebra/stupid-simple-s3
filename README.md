@@ -222,7 +222,7 @@ vcl 4.1;
 
 backend default {
     .host = "127.0.0.1";
-    .port = "8080";
+    .port = "5553";
 }
 
 sub vcl_recv {
@@ -234,6 +234,55 @@ sub vcl_backend_response {
     # Do not cache responses
     set beresp.uncacheable = true;
 }
+```
+
+## Releasing
+
+Releases are automated via GitHub Actions. Pushing a version tag triggers the release workflow.
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The release workflow builds and publishes:
+
+| Artifact | Description |
+|----------|-------------|
+| `sss-linux-amd64` | Linux binary (x86_64) |
+| `sss-linux-arm64` | Linux binary (ARM64) |
+| `sss-darwin-amd64` | macOS binary (Intel) |
+| `sss-darwin-arm64` | macOS binary (Apple Silicon) |
+| `sss_*_amd64.deb` | Debian/Ubuntu package (x86_64) |
+| `sss_*_arm64.deb` | Debian/Ubuntu package (ARM64) |
+| `sss-*.x86_64.rpm` | RHEL/Fedora package (x86_64) |
+| `sss-*.aarch64.rpm` | RHEL/Fedora package (ARM64) |
+| `checksums.txt` | SHA256 checksums |
+| Container image | Multi-arch image on ghcr.io |
+
+### Installing from packages
+
+```bash
+# Debian/Ubuntu
+sudo dpkg -i sss_1.0.0_amd64.deb
+sudo vi /etc/sss/config.yaml  # Edit configuration
+sudo systemctl enable --now sss
+
+# RHEL/Fedora
+sudo rpm -i sss-1.0.0.x86_64.rpm
+sudo vi /etc/sss/config.yaml  # Edit configuration
+sudo systemctl enable --now sss
+```
+
+### Running with Docker
+
+```bash
+docker run -d \
+  -p 5553:5553 \
+  -v /path/to/config.yaml:/etc/sss/config.yaml:ro \
+  -v /path/to/data:/var/lib/sss/data \
+  -v /path/to/tmp:/var/lib/sss/tmp \
+  ghcr.io/espebra/stupid-simple-s3:latest
 ```
 
 ## Testing
