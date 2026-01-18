@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/espen/stupid-simple-s3/internal/auth"
 	"github.com/espen/stupid-simple-s3/internal/config"
 	"github.com/espen/stupid-simple-s3/internal/s3"
 	"github.com/espen/stupid-simple-s3/internal/storage"
@@ -178,6 +179,9 @@ func (h *Handlers) GetObject(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("x-amz-meta-"+k, v)
 	}
 
+	// Apply response header overrides for presigned URLs
+	applyResponseHeaderOverrides(w, r)
+
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, reader)
 }
@@ -250,8 +254,32 @@ func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("x-amz-meta-"+k, v)
 	}
 
+	// Apply response header overrides for presigned URLs
+	applyResponseHeaderOverrides(w, r)
+
 	w.WriteHeader(http.StatusPartialContent)
 	_, _ = io.Copy(w, reader)
+}
+
+// applyResponseHeaderOverrides applies response header overrides from presigned URL query parameters.
+// Only applies overrides for presigned requests.
+func applyResponseHeaderOverrides(w http.ResponseWriter, r *http.Request) {
+	// Only apply overrides for presigned requests
+	if !auth.IsPresignedRequest(r) {
+		return
+	}
+
+	query := r.URL.Query()
+
+	if v := query.Get("response-content-type"); v != "" {
+		w.Header().Set("Content-Type", v)
+	}
+	if v := query.Get("response-content-disposition"); v != "" {
+		w.Header().Set("Content-Disposition", v)
+	}
+	if v := query.Get("response-cache-control"); v != "" {
+		w.Header().Set("Cache-Control", v)
+	}
 }
 
 // parseRangeHeader parses a Range header value
