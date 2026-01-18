@@ -484,6 +484,92 @@ func TestAbortMultipartUpload(t *testing.T) {
 	}
 }
 
+func TestMetricsBasicAuth(t *testing.T) {
+	dummyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("metrics"))
+	})
+
+	t.Run("anonymous access allowed when no credentials configured", func(t *testing.T) {
+		middleware := MetricsBasicAuth("", "")
+		handler := middleware(dummyHandler)
+
+		req := httptest.NewRequest("GET", "/metrics", nil)
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+	})
+
+	t.Run("valid credentials accepted", func(t *testing.T) {
+		middleware := MetricsBasicAuth("admin", "secret")
+		handler := middleware(dummyHandler)
+
+		req := httptest.NewRequest("GET", "/metrics", nil)
+		req.SetBasicAuth("admin", "secret")
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+	})
+
+	t.Run("invalid password rejected", func(t *testing.T) {
+		middleware := MetricsBasicAuth("admin", "secret")
+		handler := middleware(dummyHandler)
+
+		req := httptest.NewRequest("GET", "/metrics", nil)
+		req.SetBasicAuth("admin", "wrong")
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+		}
+		if w.Header().Get("WWW-Authenticate") == "" {
+			t.Error("WWW-Authenticate header should be set")
+		}
+	})
+
+	t.Run("invalid username rejected", func(t *testing.T) {
+		middleware := MetricsBasicAuth("admin", "secret")
+		handler := middleware(dummyHandler)
+
+		req := httptest.NewRequest("GET", "/metrics", nil)
+		req.SetBasicAuth("wrong", "secret")
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+		}
+	})
+
+	t.Run("missing credentials rejected when auth required", func(t *testing.T) {
+		middleware := MetricsBasicAuth("admin", "secret")
+		handler := middleware(dummyHandler)
+
+		req := httptest.NewRequest("GET", "/metrics", nil)
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+		}
+		if w.Header().Get("WWW-Authenticate") == "" {
+			t.Error("WWW-Authenticate header should be set")
+		}
+	})
+}
+
 func TestPostObjectRouting(t *testing.T) {
 	handlers, _, cleanup := setupTestHandlers(t)
 	defer cleanup()
