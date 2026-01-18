@@ -1,0 +1,71 @@
+package api
+
+import (
+	"log"
+	"net/http"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/espen/stupid-simple-s3/internal/config"
+	"github.com/espen/stupid-simple-s3/internal/storage"
+)
+
+// Server is the S3 HTTP server
+type Server struct {
+	cfg      *config.Config
+	handlers *Handlers
+	mux      *http.ServeMux
+}
+
+// NewServer creates a new S3 server
+func NewServer(cfg *config.Config, store storage.MultipartStorage) *Server {
+	s := &Server{
+		cfg:      cfg,
+		handlers: NewHandlers(cfg, store),
+		mux:      http.NewServeMux(),
+	}
+	s.setupRoutes()
+	return s
+}
+
+// setupRoutes configures the HTTP routes
+func (s *Server) setupRoutes() {
+	authMiddleware := AuthMiddleware(s.cfg)
+
+	// Bucket operations
+	s.mux.Handle("HEAD /{bucket}", MetricsMiddleware(authMiddleware(http.HandlerFunc(s.handlers.HeadBucket))))
+	s.mux.Handle("GET /{bucket}", MetricsMiddleware(authMiddleware(http.HandlerFunc(s.handlers.GetBucket))))
+	s.mux.Handle("POST /{bucket}", MetricsMiddleware(authMiddleware(RequireWritePrivilege(http.HandlerFunc(s.handlers.PostBucket)))))
+
+	// Object operations (read)
+	s.mux.Handle("GET /{bucket}/{key...}", MetricsMiddleware(authMiddleware(http.HandlerFunc(s.handlers.GetObject))))
+	s.mux.Handle("HEAD /{bucket}/{key...}", MetricsMiddleware(authMiddleware(http.HandlerFunc(s.handlers.HeadObject))))
+
+	// Object operations (write) - require write privilege
+	s.mux.Handle("PUT /{bucket}/{key...}", MetricsMiddleware(authMiddleware(RequireWritePrivilege(http.HandlerFunc(s.handlers.PutObject)))))
+	s.mux.Handle("DELETE /{bucket}/{key...}", MetricsMiddleware(authMiddleware(RequireWritePrivilege(http.HandlerFunc(s.handlers.DeleteObject)))))
+	s.mux.Handle("POST /{bucket}/{key...}", MetricsMiddleware(authMiddleware(RequireWritePrivilege(http.HandlerFunc(s.handlers.PostObject)))))
+}
+
+// Handler returns the HTTP handler that includes metrics endpoint
+func (s *Server) Handler() http.Handler {
+	// Wrap mux to handle /metrics before the S3 routes
+	// This avoids Go 1.24+ routing conflicts between /metrics and /{bucket}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/metrics" {
+			promhttp.Handler().ServeHTTP(w, r)
+			return
+		}
+		s.mux.ServeHTTP(w, r)
+	})
+	return AccessLogMiddleware(handler)
+}
+
+// ListenAndServe starts the server
+func (s *Server) ListenAndServe() error {
+	log.Printf("Starting S3 server on %s", s.cfg.Server.Address)
+	log.Printf("Bucket: %s", s.cfg.Bucket.Name)
+	log.Printf("Storage path: %s", s.cfg.Storage.Path)
+	log.Printf("Metrics available at /metrics")
+	return http.ListenAndServe(s.cfg.Server.Address, s.Handler())
+}
