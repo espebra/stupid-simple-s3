@@ -641,3 +641,110 @@ func TestPostObjectRouting(t *testing.T) {
 		}
 	})
 }
+
+func TestPresignedResponseHeaderOverrides(t *testing.T) {
+	handlers, _, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	// Create a test object first
+	key := "presigned-header-test.txt"
+	content := []byte("test content")
+	putReq := httptest.NewRequest("PUT", "/test-bucket/"+key, bytes.NewReader(content))
+	putReq.SetPathValue("bucket", "test-bucket")
+	putReq.SetPathValue("key", key)
+	putReq.Header.Set("Content-Type", "text/plain")
+	handlers.PutObject(httptest.NewRecorder(), putReq)
+
+	t.Run("presigned request with response-content-type", func(t *testing.T) {
+		// Simulate a presigned request by adding the required query parameters
+		req := httptest.NewRequest("GET", "/test-bucket/"+key+"?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=test&X-Amz-Signature=test&response-content-type=application/octet-stream", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", key)
+		w := httptest.NewRecorder()
+
+		handlers.GetObject(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+		if got := w.Header().Get("Content-Type"); got != "application/octet-stream" {
+			t.Errorf("Content-Type = %q, want %q", got, "application/octet-stream")
+		}
+	})
+
+	t.Run("presigned request with response-content-disposition", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test-bucket/"+key+"?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=test&X-Amz-Signature=test&response-content-disposition=attachment%3Bfilename%3Ddownload.txt", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", key)
+		w := httptest.NewRecorder()
+
+		handlers.GetObject(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+		if got := w.Header().Get("Content-Disposition"); got != "attachment;filename=download.txt" {
+			t.Errorf("Content-Disposition = %q, want %q", got, "attachment;filename=download.txt")
+		}
+	})
+
+	t.Run("presigned request with response-cache-control", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test-bucket/"+key+"?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=test&X-Amz-Signature=test&response-cache-control=max-age=3600", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", key)
+		w := httptest.NewRecorder()
+
+		handlers.GetObject(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+		if got := w.Header().Get("Cache-Control"); got != "max-age=3600" {
+			t.Errorf("Cache-Control = %q, want %q", got, "max-age=3600")
+		}
+	})
+
+	t.Run("presigned request with all response headers", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test-bucket/"+key+"?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=test&X-Amz-Signature=test&response-content-type=image/png&response-content-disposition=inline&response-cache-control=no-cache", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", key)
+		w := httptest.NewRecorder()
+
+		handlers.GetObject(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+		if got := w.Header().Get("Content-Type"); got != "image/png" {
+			t.Errorf("Content-Type = %q, want %q", got, "image/png")
+		}
+		if got := w.Header().Get("Content-Disposition"); got != "inline" {
+			t.Errorf("Content-Disposition = %q, want %q", got, "inline")
+		}
+		if got := w.Header().Get("Cache-Control"); got != "no-cache" {
+			t.Errorf("Cache-Control = %q, want %q", got, "no-cache")
+		}
+	})
+
+	t.Run("non-presigned request ignores response header overrides", func(t *testing.T) {
+		// Request without presigned URL parameters
+		req := httptest.NewRequest("GET", "/test-bucket/"+key+"?response-content-type=application/octet-stream&response-content-disposition=attachment", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", key)
+		w := httptest.NewRecorder()
+
+		handlers.GetObject(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+		// Should use the original content type, not the override
+		if got := w.Header().Get("Content-Type"); got != "text/plain" {
+			t.Errorf("Content-Type = %q, want %q (should not be overridden)", got, "text/plain")
+		}
+		// Should not have Content-Disposition set
+		if got := w.Header().Get("Content-Disposition"); got != "" {
+			t.Errorf("Content-Disposition = %q, want empty (should not be set)", got)
+		}
+	})
+}
