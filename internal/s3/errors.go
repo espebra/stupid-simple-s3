@@ -109,5 +109,5 @@ func (e *Error) Error() string {
 func (e *Error) WriteResponse(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(e.StatusCode())
-	xml.NewEncoder(w).Encode(e)
+	_ = xml.NewEncoder(w).Encode(e)
 }

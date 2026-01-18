@@ -135,7 +135,7 @@ func (h *Handlers) CopyObject(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusOK)
-	xml.NewEncoder(w).Encode(result)
+	_ = xml.NewEncoder(w).Encode(result)
 }
 
 // GetObject handles GET /{bucket}/{key...}
@@ -179,7 +179,7 @@ func (h *Handlers) GetObject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	io.Copy(w, reader)
+	_, _ = io.Copy(w, reader)
 }
 
 // GetObjectRange handles GET with Range header
@@ -251,7 +251,7 @@ func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusPartialContent)
-	io.Copy(w, reader)
+	_, _ = io.Copy(w, reader)
 }
 
 // parseRangeHeader parses a Range header value
@@ -396,7 +396,7 @@ func (h *Handlers) CreateMultipartUpload(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusOK)
-	xml.NewEncoder(w).Encode(result)
+	_ = xml.NewEncoder(w).Encode(result)
 }
 
 // UploadPart handles PUT /{bucket}/{key}?partNumber=N&uploadId=X
@@ -511,7 +511,7 @@ func (h *Handlers) CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusOK)
-	xml.NewEncoder(w).Encode(result)
+	_ = xml.NewEncoder(w).Encode(result)
 }
 
 // AbortMultipartUpload handles DELETE /{bucket}/{key}?uploadId=X
@@ -651,7 +651,7 @@ func (h *Handlers) ListObjectsV2(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusOK)
-	xml.NewEncoder(w).Encode(response)
+	_ = xml.NewEncoder(w).Encode(response)
 }
 
 // PostBucket handles POST /{bucket} for bucket-level operations like DeleteObjects
@@ -705,5 +705,5 @@ func (h *Handlers) DeleteObjects(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusOK)
-	xml.NewEncoder(w).Encode(result)
+	_ = xml.NewEncoder(w).Encode(result)
 }

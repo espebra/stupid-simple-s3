@@ -36,7 +36,7 @@ func TestMinioSDK_BucketExists(t *testing.T) {
 			t.Fatalf("failed to upload to bucket: %v", err)
 		}
 		// Clean up
-		client.RemoveObject(ctx, TestBucket, "bucket-test.txt", minio.RemoveObjectOptions{})
+		_ = client.RemoveObject(ctx, TestBucket, "bucket-test.txt", minio.RemoveObjectOptions{})
 	})
 
 	t.Run("non-existing bucket", func(t *testing.T) {
@@ -245,7 +245,7 @@ func TestMinioSDK_ListObjects(t *testing.T) {
 	// Clean up at end of test
 	defer func() {
 		for _, key := range files {
-			client.RemoveObject(ctx, TestBucket, key, minio.RemoveObjectOptions{})
+			_ = client.RemoveObject(ctx, TestBucket, key, minio.RemoveObjectOptions{})
 		}
 	}()
 
@@ -615,7 +615,7 @@ func TestMinioSDK_Authentication(t *testing.T) {
 		if err != nil {
 			t.Fatalf("PutObject with valid credentials failed: %v", err)
 		}
-		client.RemoveObject(ctx, TestBucket, key, minio.RemoveObjectOptions{})
+		_ = client.RemoveObject(ctx, TestBucket, key, minio.RemoveObjectOptions{})
 	})
 
 	t.Run("invalid access key", func(t *testing.T) {

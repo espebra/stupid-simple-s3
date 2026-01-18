@@ -52,7 +52,7 @@ func BenchmarkPutObject(b *testing.B) {
 
 			// Pre-generate random content
 			content := make([]byte, size)
-			rand.Read(content)
+			_, _ = rand.Read(content)
 
 			b.SetBytes(int64(size))
 			b.ResetTimer()
@@ -83,9 +83,11 @@ func BenchmarkGetObject(b *testing.B) {
 
 			// Create object first
 			content := make([]byte, size)
-			rand.Read(content)
+			_, _ = rand.Read(content)
 			key := "bench-get-object"
-			storage.PutObject(key, "application/octet-stream", nil, bytes.NewReader(content))
+			if _, err := storage.PutObject(key, "application/octet-stream", nil, bytes.NewReader(content)); err != nil {
+				b.Fatalf("PutObject failed: %v", err)
+			}
 
 			b.SetBytes(int64(size))
 			b.ResetTimer()
@@ -95,8 +97,8 @@ func BenchmarkGetObject(b *testing.B) {
 				if err != nil {
 					b.Fatalf("GetObject failed: %v", err)
 				}
-				io.Copy(io.Discard, reader)
-				reader.Close()
+				_, _ = io.Copy(io.Discard, reader)
+				_ = reader.Close()
 			}
 		})
 	}
@@ -108,7 +110,9 @@ func BenchmarkHeadObject(b *testing.B) {
 
 	// Create object first
 	key := "bench-head-object"
-	storage.PutObject(key, "text/plain", nil, bytes.NewReader([]byte("content")))
+	if _, err := storage.PutObject(key, "text/plain", nil, bytes.NewReader([]byte("content"))); err != nil {
+		b.Fatalf("PutObject failed: %v", err)
+	}
 
 	b.ResetTimer()
 
@@ -127,7 +131,9 @@ func BenchmarkDeleteObject(b *testing.B) {
 	// Pre-create objects
 	for i := 0; i < b.N; i++ {
 		key := fmt.Sprintf("bench-delete-%d", i)
-		storage.PutObject(key, "text/plain", nil, bytes.NewReader([]byte("content")))
+		if _, err := storage.PutObject(key, "text/plain", nil, bytes.NewReader([]byte("content"))); err != nil {
+			b.Fatalf("PutObject failed: %v", err)
+		}
 	}
 
 	b.ResetTimer()
@@ -146,7 +152,9 @@ func BenchmarkObjectExists(b *testing.B) {
 	defer cleanup()
 
 	key := "bench-exists-object"
-	storage.PutObject(key, "text/plain", nil, bytes.NewReader([]byte("content")))
+	if _, err := storage.PutObject(key, "text/plain", nil, bytes.NewReader([]byte("content"))); err != nil {
+		b.Fatalf("PutObject failed: %v", err)
+	}
 
 	b.ResetTimer()
 
@@ -175,7 +183,7 @@ func BenchmarkMultipartUpload(b *testing.B) {
 
 				// Pre-generate part content
 				partContent := make([]byte, partSize)
-				rand.Read(partContent)
+				_, _ = rand.Read(partContent)
 
 				totalSize := int64(partSize * parts)
 				b.SetBytes(totalSize)
@@ -216,7 +224,7 @@ func BenchmarkConcurrentPutObject(b *testing.B) {
 	defer cleanup()
 
 	content := make([]byte, 64*1024) // 64KB
-	rand.Read(content)
+	_, _ = rand.Read(content)
 
 	var counter atomic.Int64
 
@@ -241,9 +249,11 @@ func BenchmarkConcurrentGetObject(b *testing.B) {
 
 	// Create object
 	content := make([]byte, 64*1024) // 64KB
-	rand.Read(content)
+	_, _ = rand.Read(content)
 	key := "bench-concurrent-get"
-	storage.PutObject(key, "application/octet-stream", nil, bytes.NewReader(content))
+	if _, err := storage.PutObject(key, "application/octet-stream", nil, bytes.NewReader(content)); err != nil {
+		b.Fatalf("PutObject failed: %v", err)
+	}
 
 	b.SetBytes(int64(len(content)))
 	b.ResetTimer()
@@ -255,8 +265,8 @@ func BenchmarkConcurrentGetObject(b *testing.B) {
 				b.Errorf("GetObject failed: %v", err)
 				continue
 			}
-			io.Copy(io.Discard, reader)
-			reader.Close()
+			_, _ = io.Copy(io.Discard, reader)
+			_ = reader.Close()
 		}
 	})
 }
@@ -266,12 +276,14 @@ func BenchmarkMixedWorkload(b *testing.B) {
 	defer cleanup()
 
 	content := make([]byte, 16*1024) // 16KB
-	rand.Read(content)
+	_, _ = rand.Read(content)
 
 	// Pre-populate some objects
 	for i := 0; i < 100; i++ {
 		key := fmt.Sprintf("preload-%d", i)
-		storage.PutObject(key, "application/octet-stream", nil, bytes.NewReader(content))
+		if _, err := storage.PutObject(key, "application/octet-stream", nil, bytes.NewReader(content)); err != nil {
+			b.Fatalf("PutObject failed: %v", err)
+		}
 	}
 
 	b.ResetTimer()
@@ -283,17 +295,17 @@ func BenchmarkMixedWorkload(b *testing.B) {
 			switch {
 			case op < 3: // 30% writes
 				key := fmt.Sprintf("mixed-write-%d", i)
-				storage.PutObject(key, "application/octet-stream", nil, bytes.NewReader(content))
+				_, _ = storage.PutObject(key, "application/octet-stream", nil, bytes.NewReader(content))
 			case op < 8: // 50% reads
 				key := fmt.Sprintf("preload-%d", i%100)
 				reader, _, err := storage.GetObject(key)
 				if err == nil {
-					io.Copy(io.Discard, reader)
-					reader.Close()
+					_, _ = io.Copy(io.Discard, reader)
+					_ = reader.Close()
 				}
 			default: // 20% head
 				key := fmt.Sprintf("preload-%d", i%100)
-				storage.HeadObject(key)
+				_, _ = storage.HeadObject(key)
 			}
 			i++
 		}
