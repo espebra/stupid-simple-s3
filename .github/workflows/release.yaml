@@ -140,7 +140,14 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
+          name: binaries
+          path: artifacts/binaries/
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
           path: artifacts/
+          merge-multiple: false
 
       - name: List downloaded artifacts
         run: ls -lR artifacts/

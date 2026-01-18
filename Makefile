@@ -1,4 +1,4 @@
-.PHONY: build run test bench clean vendor fmt fmt-check
+.PHONY: build run test bench fuzz clean vendor fmt fmt-check
 
 BINARY_NAME=stupid-simple-s3
 BUILD_DIR=bin
@@ -14,6 +14,11 @@ test:
 
 bench:
 	go test -mod=vendor -bench=. -benchmem ./...
+
+fuzz:
+	go test -fuzz=FuzzParseAuthorization -fuzztime=1h ./internal/auth/
+	go test -fuzz=FuzzParsePresignedURL -fuzztime=1h ./internal/auth/
+	go test -fuzz=FuzzURIEncode -fuzztime=1h ./internal/auth/
 
 clean:
 	rm -rf $(BUILD_DIR)
