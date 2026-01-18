@@ -78,6 +78,10 @@ jobs:
           envsubst < nfpm.yaml > nfpm-resolved.yaml
           nfpm package -p ${{ matrix.format }} -f nfpm-resolved.yaml
 
+      - name: Verify package files exist
+        run: |
+          ls *.${{ matrix.format }}
+
       - uses: actions/upload-artifact@v4
         with:
           name: package-${{ matrix.format }}-${{ matrix.arch }}
@@ -137,6 +141,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts/
+
+      - name: List downloaded artifacts
+        run: ls -lR artifacts/
 
       - name: Prepare release files
         run: |
