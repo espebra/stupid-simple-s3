@@ -183,7 +183,7 @@ func (fs *FilesystemStorage) DeleteObject(key string) error {
 
 	// Try to remove empty parent directory (ignore errors)
 	parentDir := filepath.Dir(objPath)
-	os.Remove(parentDir) // only succeeds if empty
+	_ = os.Remove(parentDir) // only succeeds if empty
 
 	return nil
 }
