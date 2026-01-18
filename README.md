@@ -20,38 +20,35 @@ A minimal S3-compatible object storage service in Go. Designed for single-server
 
 ## Configuration
 
-Create a `config.yaml` file:
+The service is configured using environment variables:
 
-```yaml
-bucket:
-  name: "my-bucket"
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `STUPID_HOST` | Listen host | `localhost` |
+| `STUPID_PORT` | Listen port | `5553` |
+| `STUPID_BUCKET_NAME` | Bucket name | (required) |
+| `STUPID_STORAGE_PATH` | Storage path for objects | `/var/lib/stupid/data` |
+| `STUPID_MULTIPART_PATH` | Storage path for multipart uploads | `/var/lib/stupid/tmp` |
+| `STUPID_CLEANUP_ENABLED` | Enable cleanup job (`true`/`false`) | `true` |
+| `STUPID_CLEANUP_INTERVAL` | Cleanup interval | `1h` |
+| `STUPID_CLEANUP_MAX_AGE` | Max age for stale uploads | `24h` |
+| `STUPID_RO_ACCESS_KEY` | Read-only user access key | (optional) |
+| `STUPID_RO_SECRET_KEY` | Read-only user secret key | (optional) |
+| `STUPID_RW_ACCESS_KEY` | Read-write user access key | (optional) |
+| `STUPID_RW_SECRET_KEY` | Read-write user secret key | (optional) |
 
-storage:
-  path: "/var/lib/sss/data"
-  multipart_path: "/var/lib/sss/tmp"
+At least one credential pair (read-only or read-write) must be provided.
 
-server:
-  address: ":5553"
+Example:
 
-credentials:
-  - access_key_id: "AKIAIOSFODNN7EXAMPLE"
-    secret_access_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-    privileges: "read-write"
-
-  - access_key_id: "AKIAIOSFODNN7READONLY"
-    secret_access_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYREADONLY"
-    privileges: "read"
-
-cleanup:
-  enabled: true
-  interval: "1h"
-  max_age: "24h"
+```bash
+export STUPID_BUCKET_NAME="my-bucket"
+export STUPID_STORAGE_PATH="/var/lib/stupid-simple-s3/data"
+export STUPID_MULTIPART_PATH="/var/lib/stupid-simple-s3/tmp"
+export STUPID_RW_ACCESS_KEY="AKIAIOSFODNN7EXAMPLE"
+export STUPID_RW_SECRET_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+./bin/stupid-simple-s3
 ```
-
-The `cleanup` section configures automatic removal of stale multipart uploads:
-- `enabled`: Set to `true` to enable the cleanup job
-- `interval`: How often to run cleanup (default: `1h`)
-- `max_age`: Remove uploads older than this duration (default: `24h`)
 
 ## Building
 
@@ -70,13 +67,15 @@ make vendor
 
 ```bash
 # Create storage directories
-mkdir -p /var/lib/sss/data /var/lib/sss/tmp
+mkdir -p /var/lib/stupid-simple-s3/data /var/lib/stupid-simple-s3/tmp
 
-# Run with default config
-make run
-
-# Or run directly
-./bin/sss -config /path/to/config.yaml
+# Set required environment variables and run
+export STUPID_BUCKET_NAME="my-bucket"
+export STUPID_STORAGE_PATH="/var/lib/stupid-simple-s3/data"
+export STUPID_MULTIPART_PATH="/var/lib/stupid-simple-s3/tmp"
+export STUPID_RW_ACCESS_KEY="AKIAIOSFODNN7EXAMPLE"
+export STUPID_RW_SECRET_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+./bin/stupid-simple-s3
 ```
 
 ## Usage with AWS CLI
@@ -157,13 +156,13 @@ Available metrics:
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `sss_http_requests_in_flight` | Gauge | Number of requests currently being processed |
-| `sss_http_requests_total` | Counter | Total HTTP requests by method, operation, and status |
-| `sss_http_request_duration_seconds` | Histogram | Request latency distribution |
-| `sss_http_request_bytes_total` | Counter | Bytes received in request bodies |
-| `sss_http_response_bytes_total` | Counter | Bytes sent in response bodies |
-| `sss_errors_total` | Counter | Errors by operation and error code |
-| `sss_auth_failures_total` | Counter | Authentication failures by reason |
+| `stupid_simple_s3_http_requests_in_flight` | Gauge | Number of requests currently being processed |
+| `stupid_simple_s3_http_requests_total` | Counter | Total HTTP requests by method, operation, and status |
+| `stupid_simple_s3_http_request_duration_seconds` | Histogram | Request latency distribution |
+| `stupid_simple_s3_http_request_bytes_total` | Counter | Bytes received in request bodies |
+| `stupid_simple_s3_http_response_bytes_total` | Counter | Bytes sent in response bodies |
+| `stupid_simple_s3_errors_total` | Counter | Errors by operation and error code |
+| `stupid_simple_s3_auth_failures_total` | Counter | Authentication failures by reason |
 
 Example Prometheus scrape config:
 
@@ -179,13 +178,13 @@ scrape_configs:
 Objects are stored on the filesystem:
 
 ```
-/var/lib/sss/data/objects/
+/var/lib/stupid-simple-s3/data/objects/
   {hash-prefix}/
     {base64-key}/
       data        # object content
       meta.json   # metadata (key, size, content-type, etag, etc.)
 
-/var/lib/sss/tmp/
+/var/lib/stupid-simple-s3/tmp/
   {upload-id}/
     meta.json     # upload metadata
     part.00001    # part files
@@ -249,14 +248,14 @@ The release workflow builds and publishes:
 
 | Artifact | Description |
 |----------|-------------|
-| `sss-linux-amd64` | Linux binary (x86_64) |
-| `sss-linux-arm64` | Linux binary (ARM64) |
-| `sss-darwin-amd64` | macOS binary (Intel) |
-| `sss-darwin-arm64` | macOS binary (Apple Silicon) |
-| `sss_*_amd64.deb` | Debian/Ubuntu package (x86_64) |
-| `sss_*_arm64.deb` | Debian/Ubuntu package (ARM64) |
-| `sss-*.x86_64.rpm` | RHEL/Fedora package (x86_64) |
-| `sss-*.aarch64.rpm` | RHEL/Fedora package (ARM64) |
+| `stupid-simple-s3-linux-amd64` | Linux binary (x86_64) |
+| `stupid-simple-s3-linux-arm64` | Linux binary (ARM64) |
+| `stupid-simple-s3-darwin-amd64` | macOS binary (Intel) |
+| `stupid-simple-s3-darwin-arm64` | macOS binary (Apple Silicon) |
+| `stupid-simple-s3_*_amd64.deb` | Debian/Ubuntu package (x86_64) |
+| `stupid-simple-s3_*_arm64.deb` | Debian/Ubuntu package (ARM64) |
+| `stupid-simple-s3-*.x86_64.rpm` | RHEL/Fedora package (x86_64) |
+| `stupid-simple-s3-*.aarch64.rpm` | RHEL/Fedora package (ARM64) |
 | `checksums.txt` | SHA256 checksums |
 | Container image | Multi-arch image on ghcr.io |
 
@@ -264,14 +263,14 @@ The release workflow builds and publishes:
 
 ```bash
 # Debian/Ubuntu
-sudo dpkg -i sss_1.0.0_amd64.deb
-sudo vi /etc/sss/config.yaml  # Edit configuration
-sudo systemctl enable --now sss
+sudo dpkg -i stupid-simple-s3_1.0.0_amd64.deb
+sudo systemctl edit stupid-simple-s3  # Add environment variables
+sudo systemctl enable --now stupid-simple-s3
 
 # RHEL/Fedora
-sudo rpm -i sss-1.0.0.x86_64.rpm
-sudo vi /etc/sss/config.yaml  # Edit configuration
-sudo systemctl enable --now sss
+sudo rpm -i stupid-simple-s3-1.0.0.x86_64.rpm
+sudo systemctl edit stupid-simple-s3  # Add environment variables
+sudo systemctl enable --now stupid-simple-s3
 ```
 
 ### Running with Docker
@@ -279,9 +278,13 @@ sudo systemctl enable --now sss
 ```bash
 docker run -d \
   -p 5553:5553 \
-  -v /path/to/config.yaml:/etc/sss/config.yaml:ro \
-  -v /path/to/data:/var/lib/sss/data \
-  -v /path/to/tmp:/var/lib/sss/tmp \
+  -e STUPID_BUCKET_NAME="my-bucket" \
+  -e STUPID_STORAGE_PATH="/data" \
+  -e STUPID_MULTIPART_PATH="/tmp" \
+  -e STUPID_RW_ACCESS_KEY="AKIAIOSFODNN7EXAMPLE" \
+  -e STUPID_RW_SECRET_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" \
+  -v /path/to/data:/data \
+  -v /path/to/tmp:/tmp \
   ghcr.io/espebra/stupid-simple-s3:latest
 ```
 

@@ -1,13 +1,13 @@
 .PHONY: build run test bench clean vendor fmt fmt-check
 
-BINARY_NAME=sss
+BINARY_NAME=stupid-simple-s3
 BUILD_DIR=bin
 
 build:
 	go build -mod=vendor -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/sss
 
 run: build
-	./$(BUILD_DIR)/$(BINARY_NAME) -config config.yaml
+	./$(BUILD_DIR)/$(BINARY_NAME)
 
 test:
 	go test -mod=vendor -v ./...
@@ -31,7 +31,7 @@ fmt-check:
 
 # Development helpers
 dev-dirs:
-	mkdir -p /var/lib/sss/data /var/lib/sss/tmp
+	mkdir -p /var/lib/stupid-simple-s3/data /var/lib/stupid-simple-s3/tmp
 
 # Build for multiple platforms
 build-all:
