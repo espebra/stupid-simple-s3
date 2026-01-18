@@ -487,7 +487,7 @@ func TestAbortMultipartUpload(t *testing.T) {
 func TestMetricsBasicAuth(t *testing.T) {
 	dummyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("metrics"))
+		_, _ = w.Write([]byte("metrics"))
 	})
 
 	t.Run("anonymous access allowed when no credentials configured", func(t *testing.T) {
