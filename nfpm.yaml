@@ -15,6 +15,24 @@ contents:
   - src: ./packaging/stupid-simple-s3.service
     dst: /lib/systemd/system/stupid-simple-s3.service
 
+  - src: ./packaging/environment
+    dst: /etc/stupid-simple-s3/environment
+    type: config|noreplace
+
+  - dst: /var/lib/stupid-simple-s3/data
+    type: dir
+    file_info:
+      owner: stupid
+      group: stupid
+      mode: 0750
+
+  - dst: /var/lib/stupid-simple-s3/tmp
+    type: dir
+    file_info:
+      owner: stupid
+      group: stupid
+      mode: 0750
+
 scripts:
   postinstall: ./packaging/postinstall.sh
 

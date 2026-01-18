@@ -1,0 +1,41 @@
+# Stupid Simple S3 Configuration
+# This file is sourced by systemd when starting the service.
+# Uncomment and modify the values as needed.
+
+# Server configuration
+# Listen host (default: all interfaces)
+#STUPID_HOST=
+
+# Listen port (default: 5553)
+#STUPID_PORT=5553
+
+# Bucket configuration (required)
+STUPID_BUCKET_NAME=my-bucket
+
+# Storage paths (defaults shown)
+#STUPID_STORAGE_PATH=/var/lib/stupid-simple-s3/data
+#STUPID_MULTIPART_PATH=/var/lib/stupid-simple-s3/tmp
+
+# Cleanup job configuration
+# Enable cleanup job (default: true)
+#STUPID_CLEANUP_ENABLED=true
+
+# Cleanup interval (default: 1h)
+#STUPID_CLEANUP_INTERVAL=1h
+
+# Max age for stale multipart uploads (default: 24h)
+#STUPID_CLEANUP_MAX_AGE=24h
+
+# Credentials - At least one credential pair is required
+# Read-only credentials (optional)
+#STUPID_RO_ACCESS_KEY=
+#STUPID_RO_SECRET_KEY=
+
+# Read-write credentials (required if no read-only credentials)
+STUPID_RW_ACCESS_KEY=your-access-key-here
+STUPID_RW_SECRET_KEY=your-secret-key-here
+
+# Metrics endpoint authentication (optional)
+# If both are set, /metrics endpoint requires basic auth
+#STUPID_METRICS_USERNAME=
+#STUPID_METRICS_PASSWORD=
