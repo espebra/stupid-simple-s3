@@ -75,10 +75,8 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           export VERSION=${GITHUB_REF_NAME#v}
-          echo "Building package for ARCH=$ARCH VERSION=$VERSION"
-          echo "Looking for binary: ./bin/stupid-simple-s3-linux-$ARCH"
-          ls -la ./bin/stupid-simple-s3-linux-$ARCH
-          nfpm package -p ${{ matrix.format }} -f nfpm.yaml
+          envsubst < nfpm.yaml > nfpm-resolved.yaml
+          nfpm package -p ${{ matrix.format }} -f nfpm-resolved.yaml
 
       - uses: actions/upload-artifact@v4
         with:
