@@ -51,9 +51,12 @@ func (s *Server) setupRoutes() {
 func (s *Server) Handler() http.Handler {
 	// Wrap mux to handle /metrics before the S3 routes
 	// This avoids Go 1.24+ routing conflicts between /metrics and /{bucket}
+	metricsAuth := MetricsBasicAuth(s.cfg.MetricsAuth.Username, s.cfg.MetricsAuth.Password)
+	metricsHandler := metricsAuth(promhttp.Handler())
+
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/metrics" {
-			promhttp.Handler().ServeHTTP(w, r)
+			metricsHandler.ServeHTTP(w, r)
 			return
 		}
 		s.mux.ServeHTTP(w, r)

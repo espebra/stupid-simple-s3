@@ -11,11 +11,11 @@ A minimal S3-compatible object storage service in Go. Designed for single-server
 
 - Single bucket configuration
 - AWS Signature v4 authentication
-- Read-only and read-write access levels per credential
+- Read-only and read-write S3 credentials
 - Presigned URL support for temporary access
 - Multipart upload support
 - Filesystem-backed storage
-- Prometheus metrics endpoint
+- Prometheus metrics endpoint with optional basic auth
 - Minimal external dependencies
 
 ## Configuration
@@ -36,6 +36,8 @@ The service is configured using environment variables:
 | `STUPID_RO_SECRET_KEY` | Read-only user secret key | (optional) |
 | `STUPID_RW_ACCESS_KEY` | Read-write user access key | (optional) |
 | `STUPID_RW_SECRET_KEY` | Read-write user secret key | (optional) |
+| `STUPID_METRICS_USERNAME` | Username for /metrics basic auth | (optional) |
+| `STUPID_METRICS_PASSWORD` | Password for /metrics basic auth | (optional) |
 
 At least one credential pair (read-only or read-write) must be provided.
 
@@ -150,7 +152,7 @@ Presigned URL parameters:
 
 ## Metrics
 
-Prometheus metrics are available at `/metrics` (no authentication required).
+Prometheus metrics are available at `/metrics`. By default, no authentication is required. To enable basic authentication, set both `STUPID_METRICS_USERNAME` and `STUPID_METRICS_PASSWORD` environment variables.
 
 Available metrics:
 
@@ -171,6 +173,10 @@ scrape_configs:
   - job_name: 'sss'
     static_configs:
       - targets: ['localhost:5553']
+    # If basic auth is enabled:
+    # basic_auth:
+    #   username: 'metrics_user'
+    #   password: 'metrics_password'
 ```
 
 ## Storage Layout
