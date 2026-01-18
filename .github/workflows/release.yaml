@@ -71,9 +71,13 @@ jobs:
         run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
 
       - name: Build package
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
           export VERSION=${GITHUB_REF_NAME#v}
-          export ARCH=${{ matrix.arch }}
+          echo "Building package for ARCH=$ARCH VERSION=$VERSION"
+          echo "Looking for binary: ./bin/stupid-simple-s3-linux-$ARCH"
+          ls -la ./bin/stupid-simple-s3-linux-$ARCH
           nfpm package -p ${{ matrix.format }} -f nfpm.yaml
 
       - uses: actions/upload-artifact@v4
@@ -126,7 +130,7 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
-    needs: [build-binaries, build-packages, build-container]
+    needs: [bench, build-binaries, build-packages, build-container]
     permissions:
       contents: write
     steps:
