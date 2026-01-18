@@ -2,6 +2,7 @@ package storage
 
 import (
 	"io"
+	"time"
 
 	"github.com/espen/stupid-simple-s3/internal/s3"
 )
@@ -68,4 +69,7 @@ type MultipartStorage interface {
 
 	// GetMultipartUpload retrieves metadata about a multipart upload
 	GetMultipartUpload(uploadID string) (*s3.MultipartUploadMetadata, error)
+
+	// CleanupStaleUploads removes multipart uploads older than maxAge
+	CleanupStaleUploads(maxAge time.Duration) (int, error)
 }

@@ -340,3 +340,49 @@ func (fs *FilesystemStorage) ListParts(uploadID string) ([]s3.PartMetadata, erro
 
 	return parts, nil
 }
+
+// CleanupStaleUploads removes multipart uploads older than maxAge
+// Returns the number of uploads cleaned up
+func (fs *FilesystemStorage) CleanupStaleUploads(maxAge time.Duration) (int, error) {
+	entries, err := os.ReadDir(fs.multipartPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("reading multipart directory: %w", err)
+	}
+
+	cutoff := time.Now().UTC().Add(-maxAge)
+	cleaned := 0
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		uploadID := entry.Name()
+		uploadMeta, err := fs.GetMultipartUpload(uploadID)
+		if err != nil {
+			// If we can't read metadata, check directory modification time
+			info, statErr := entry.Info()
+			if statErr != nil {
+				continue
+			}
+			if info.ModTime().Before(cutoff) {
+				uploadPath := filepath.Join(fs.multipartPath, uploadID)
+				if removeErr := os.RemoveAll(uploadPath); removeErr == nil {
+					cleaned++
+				}
+			}
+			continue
+		}
+
+		if uploadMeta.Created.Before(cutoff) {
+			if abortErr := fs.AbortMultipartUpload(uploadID); abortErr == nil {
+				cleaned++
+			}
+		}
+	}
+
+	return cleaned, nil
+}

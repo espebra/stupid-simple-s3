@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -29,6 +30,36 @@ type Storage struct {
 	MultipartPath string `yaml:"multipart_path"`
 }
 
+type Cleanup struct {
+	Enabled  bool   `yaml:"enabled"`
+	Interval string `yaml:"interval"`
+	MaxAge   string `yaml:"max_age"`
+}
+
+// GetInterval returns the cleanup interval as a duration, defaulting to 1 hour
+func (c *Cleanup) GetInterval() time.Duration {
+	if c.Interval == "" {
+		return time.Hour
+	}
+	d, err := time.ParseDuration(c.Interval)
+	if err != nil {
+		return time.Hour
+	}
+	return d
+}
+
+// GetMaxAge returns the max age for stale uploads, defaulting to 24 hours
+func (c *Cleanup) GetMaxAge() time.Duration {
+	if c.MaxAge == "" {
+		return 24 * time.Hour
+	}
+	d, err := time.ParseDuration(c.MaxAge)
+	if err != nil {
+		return 24 * time.Hour
+	}
+	return d
+}
+
 type Server struct {
 	Address string `yaml:"address"`
 }
@@ -38,6 +69,7 @@ type Config struct {
 	Storage     Storage      `yaml:"storage"`
 	Server      Server       `yaml:"server"`
 	Credentials []Credential `yaml:"credentials"`
+	Cleanup     Cleanup      `yaml:"cleanup"`
 }
 
 func Load(path string) (*Config, error) {

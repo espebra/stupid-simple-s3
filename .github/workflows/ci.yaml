@@ -47,11 +47,14 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Run tests
-        run: make test
+      - name: Run tests with coverage
+        run: go test -mod=vendor -race -coverprofile=coverage.out -covermode=atomic ./...
 
-      - name: Run tests with race detector
-        run: go test -mod=vendor -race ./...
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.out
+          fail_ci_if_error: false
 
   bench:
     runs-on: ubuntu-latest
@@ -80,7 +83,15 @@ jobs:
       - name: Build binary
         run: make build
 
+      - name: Build all platforms
+        run: make build-all
+
       - uses: actions/upload-artifact@v4
         with:
           name: sss-linux-amd64
-          path: bin/sss
+          path: bin/sss-linux-amd64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sss-linux-arm64
+          path: bin/sss-linux-arm64

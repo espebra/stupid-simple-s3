@@ -38,7 +38,17 @@ credentials:
   - access_key_id: "AKIAIOSFODNN7READONLY"
     secret_access_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYREADONLY"
     privileges: "read"
+
+cleanup:
+  enabled: true
+  interval: "1h"
+  max_age: "24h"
 ```
+
+The `cleanup` section configures automatic removal of stale multipart uploads:
+- `enabled`: Set to `true` to enable the cleanup job
+- `interval`: How often to run cleanup (default: `1h`)
+- `max_age`: Remove uploads older than this duration (default: `24h`)
 
 ## Building
 

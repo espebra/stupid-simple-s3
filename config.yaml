@@ -16,3 +16,8 @@ credentials:
   - access_key_id: "AKIAIOSFODNN7READONLY"
     secret_access_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYREADONLY"
     privileges: "read"
+
+cleanup:
+  enabled: true
+  interval: "1h"
+  max_age: "24h"
