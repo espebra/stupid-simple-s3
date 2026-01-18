@@ -45,7 +45,7 @@ jobs:
 
       - name: Install nfpm
         run: |
-          curl -sfL https://github.com/goreleaser/nfpm/releases/download/v2.41.1/nfpm_2.41.1_linux_amd64.tar.gz | tar xz -C /usr/local/bin nfpm
+          curl -sfL https://github.com/goreleaser/nfpm/releases/download/v2.41.1/nfpm_2.41.1_linux_amd64.tar.gz | sudo tar xz -C /usr/local/bin nfpm
 
       - name: Build package
         run: |
@@ -55,7 +55,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: package-${{ matrix.format }}-${{ matrix.arch }}
-          path: "*.@(${{ matrix.format }})"
+          path: "*.${{ matrix.format }}"
 
   build-container:
     runs-on: ubuntu-latest
