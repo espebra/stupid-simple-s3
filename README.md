@@ -40,6 +40,15 @@ The service is configured using environment variables:
 
 At least one credential pair (read-only or read-write) must be provided.
 
+### Cleanup Job
+
+The cleanup job runs periodically to remove stale multipart uploads. When a multipart upload is initiated but never completed or aborted, the uploaded parts remain on disk in the `STUPID_MULTIPART_PATH` directory. The cleanup job deletes these orphaned uploads to reclaim disk space.
+
+- **Interval**: How often the cleanup job runs (default: every hour)
+- **Max Age**: Uploads older than this are considered stale and removed (default: 24 hours)
+
+Set `STUPID_CLEANUP_ENABLED=false` to disable the cleanup job entirely.
+
 Example:
 
 ```bash
@@ -180,11 +189,11 @@ scrape_configs:
 
 ## Storage Layout
 
-Objects are stored on the filesystem:
+Objects are stored on the filesystem with a 4-character hash prefix (65,536 buckets) for even distribution:
 
 ```
 /var/lib/stupid-simple-s3/data/objects/
-  {hash-prefix}/
+  {4-char-hash-prefix}/
     {base64-key}/
       data        # object content
       meta.json   # metadata (key, size, content-type, etag, etc.)

@@ -47,11 +47,11 @@ func NewFilesystemStorage(basePath, multipartPath string) (*FilesystemStorage, e
 }
 
 // keyToPath converts an object key to a filesystem path
-// Uses a 2-character hash prefix for directory distribution and base64-encoded key
+// Uses a 4-character hash prefix for directory distribution (65,536 buckets) and base64-encoded key
 func (fs *FilesystemStorage) keyToPath(key string) string {
-	// Create a hash prefix from the first 2 chars of MD5 of the key
+	// Create a hash prefix from the first 4 chars of MD5 of the key
 	hash := md5.Sum([]byte(key))
-	prefix := hex.EncodeToString(hash[:1])
+	prefix := hex.EncodeToString(hash[:2])
 
 	// Base64 encode the key for safe filesystem storage
 	encodedKey := base64.URLEncoding.EncodeToString([]byte(key))
