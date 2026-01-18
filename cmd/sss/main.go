@@ -16,10 +16,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
+	cfg.Log()
 
 	// Initialize storage (creates directories if they don't exist)
-	log.Printf("Storage path: %s", cfg.Storage.Path)
-	log.Printf("Multipart path: %s", cfg.Storage.MultipartPath)
 	store, err := storage.NewFilesystemStorage(cfg.Storage.Path, cfg.Storage.MultipartPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize storage: %v", err)

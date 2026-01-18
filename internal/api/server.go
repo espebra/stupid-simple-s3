@@ -67,8 +67,5 @@ func (s *Server) Handler() http.Handler {
 // ListenAndServe starts the server
 func (s *Server) ListenAndServe() error {
 	log.Printf("Starting S3 server on %s", s.cfg.Server.Address)
-	log.Printf("Bucket: %s", s.cfg.Bucket.Name)
-	log.Printf("Storage path: %s", s.cfg.Storage.Path)
-	log.Printf("Metrics available at /metrics")
 	return http.ListenAndServe(s.cfg.Server.Address, s.Handler())
 }

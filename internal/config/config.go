@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"time"
 )
@@ -220,4 +221,21 @@ func (c *Config) GetCredential(accessKeyID string) *Credential {
 
 func (c *Credential) CanWrite() bool {
 	return c.Privileges == PrivilegeReadWrite
+}
+
+// Log prints the configuration to stdout, excluding secret values
+func (c *Config) Log() {
+	log.Println("Configuration:")
+	log.Printf("  Server address: %s", c.Server.Address)
+	log.Printf("  Bucket name: %s", c.Bucket.Name)
+	log.Printf("  Storage path: %s", c.Storage.Path)
+	log.Printf("  Multipart path: %s", c.Storage.MultipartPath)
+	log.Printf("  Cleanup enabled: %t", c.Cleanup.Enabled)
+	log.Printf("  Cleanup interval: %s", c.Cleanup.GetInterval())
+	log.Printf("  Cleanup max age: %s", c.Cleanup.GetMaxAge())
+	log.Printf("  Metrics auth enabled: %t", c.MetricsAuth.Enabled())
+	log.Printf("  Credentials: %d configured", len(c.Credentials))
+	for i, cred := range c.Credentials {
+		log.Printf("    [%d] Access key: %s, Privileges: %s", i, cred.AccessKeyID, cred.Privileges)
+	}
 }

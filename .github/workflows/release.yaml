@@ -48,13 +48,20 @@ jobs:
           name: binaries
           path: bin/
 
+      - name: List downloaded binaries
+        run: ls -la bin/
+
+      - name: Make binaries executable
+        run: chmod +x bin/*
+
       - name: Install nfpm
         run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
 
       - name: Build package
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          ARCH=${{ matrix.arch }} VERSION=$VERSION nfpm package -p ${{ matrix.format }} -f nfpm.yaml
+          export VERSION=${GITHUB_REF_NAME#v}
+          export ARCH=${{ matrix.arch }}
+          nfpm package -p ${{ matrix.format }} -f nfpm.yaml
 
       - uses: actions/upload-artifact@v4
         with:
