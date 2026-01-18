@@ -87,8 +87,8 @@ type Config struct {
 //   - STUPID_HOST: Listen host (default: all interfaces)
 //   - STUPID_PORT: Listen port (default: "5553")
 //   - STUPID_BUCKET_NAME: Bucket name (required)
-//   - STUPID_STORAGE_PATH: Storage path (default: "/var/lib/stupid/data")
-//   - STUPID_MULTIPART_PATH: Multipart storage path (default: "/var/lib/stupid/tmp")
+//   - STUPID_STORAGE_PATH: Storage path (default: "/var/lib/stupid-simple-s3/data")
+//   - STUPID_MULTIPART_PATH: Multipart storage path (default: "/var/lib/stupid-simple-s3/tmp")
 //   - STUPID_CLEANUP_ENABLED: Enable cleanup job (default: "true")
 //   - STUPID_CLEANUP_INTERVAL: Cleanup interval (default: "1h")
 //   - STUPID_CLEANUP_MAX_AGE: Max age for stale uploads (default: "24h")
@@ -109,12 +109,12 @@ func Load() (*Config, error) {
 
 	storagePath := os.Getenv("STUPID_STORAGE_PATH")
 	if storagePath == "" {
-		storagePath = "/var/lib/stupid/data"
+		storagePath = "/var/lib/stupid-simple-s3/data"
 	}
 
 	multipartPath := os.Getenv("STUPID_MULTIPART_PATH")
 	if multipartPath == "" {
-		multipartPath = "/var/lib/stupid/tmp"
+		multipartPath = "/var/lib/stupid-simple-s3/tmp"
 	}
 
 	cfg := &Config{

@@ -189,11 +189,11 @@ func TestLoad(t *testing.T) {
 			t.Fatalf("Load failed: %v", err)
 		}
 
-		if cfg.Storage.Path != "/var/lib/stupid/data" {
-			t.Errorf("Storage.Path = %q, want %q", cfg.Storage.Path, "/var/lib/stupid/data")
+		if cfg.Storage.Path != "/var/lib/stupid-simple-s3/data" {
+			t.Errorf("Storage.Path = %q, want %q", cfg.Storage.Path, "/var/lib/stupid-simple-s3/data")
 		}
-		if cfg.Storage.MultipartPath != "/var/lib/stupid/tmp" {
-			t.Errorf("Storage.MultipartPath = %q, want %q", cfg.Storage.MultipartPath, "/var/lib/stupid/tmp")
+		if cfg.Storage.MultipartPath != "/var/lib/stupid-simple-s3/tmp" {
+			t.Errorf("Storage.MultipartPath = %q, want %q", cfg.Storage.MultipartPath, "/var/lib/stupid-simple-s3/tmp")
 		}
 	})
 

@@ -14,12 +14,12 @@ COPY internal/ internal/
 RUN CGO_ENABLED=0 go build -mod=vendor -ldflags="-s -w" -o stupid-simple-s3 ./cmd/sss
 
 # Create data directories
-RUN mkdir -p /var/lib/stupid/data /var/lib/stupid/tmp
+RUN mkdir -p /var/lib/stupid-simple-s3/data /var/lib/stupid-simple-s3/tmp
 
 FROM gcr.io/distroless/static:nonroot
 
 COPY --from=builder /build/stupid-simple-s3 /stupid-simple-s3
-COPY --from=builder --chown=nonroot:nonroot /var/lib/stupid /var/lib/stupid
+COPY --from=builder --chown=nonroot:nonroot /var/lib/stupid-simple-s3 /var/lib/stupid-simple-s3
 
 USER nonroot:nonroot
 
