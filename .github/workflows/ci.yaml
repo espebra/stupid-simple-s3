@@ -75,9 +75,25 @@ jobs:
           name: coverage-report
           path: coverage.html
 
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Run fuzz tests
+        run: |
+          go test -fuzz=FuzzParseAuthorization -fuzztime=10s ./internal/auth/
+          go test -fuzz=FuzzParsePresignedURL -fuzztime=10s ./internal/auth/
+          go test -fuzz=FuzzURIEncode -fuzztime=10s ./internal/auth/
+
   build:
     runs-on: ubuntu-latest
-    needs: [lint, verify-vendor, test]
+    needs: [lint, verify-vendor, test, fuzz]
     steps:
       - uses: actions/checkout@v4
 

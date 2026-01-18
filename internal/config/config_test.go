@@ -56,8 +56,8 @@ func TestLoad(t *testing.T) {
 		if cfg.Storage.Path != "/var/lib/data" {
 			t.Errorf("Storage.Path = %q, want %q", cfg.Storage.Path, "/var/lib/data")
 		}
-		if cfg.Server.Address != "localhost:5553" {
-			t.Errorf("Server.Address = %q, want %q", cfg.Server.Address, "localhost:5553")
+		if cfg.Server.Address != ":5553" {
+			t.Errorf("Server.Address = %q, want %q", cfg.Server.Address, ":5553")
 		}
 		if len(cfg.Credentials) != 1 {
 			t.Errorf("len(Credentials) = %d, want 1", len(cfg.Credentials))
