@@ -31,7 +31,7 @@ storage:
   multipart_path: "/var/lib/sss/tmp"
 
 server:
-  address: ":8080"
+  address: ":5553"
 
 credentials:
   - access_key_id: "AKIAIOSFODNN7EXAMPLE"
@@ -93,16 +93,16 @@ Basic operations:
 
 ```bash
 # Upload a file
-aws --endpoint-url http://localhost:8080 s3 cp file.txt s3://my-bucket/file.txt
+aws --endpoint-url http://localhost:5553 s3 cp file.txt s3://my-bucket/file.txt
 
 # Download a file
-aws --endpoint-url http://localhost:8080 s3 cp s3://my-bucket/file.txt -
+aws --endpoint-url http://localhost:5553 s3 cp s3://my-bucket/file.txt -
 
 # Delete a file
-aws --endpoint-url http://localhost:8080 s3 rm s3://my-bucket/file.txt
+aws --endpoint-url http://localhost:5553 s3 rm s3://my-bucket/file.txt
 
 # Upload a large file (uses multipart automatically)
-aws --endpoint-url http://localhost:8080 s3 cp large-file.bin s3://my-bucket/large-file.bin
+aws --endpoint-url http://localhost:5553 s3 cp large-file.bin s3://my-bucket/large-file.bin
 ```
 
 ## Presigned URLs
@@ -111,20 +111,20 @@ Generate presigned URLs to grant temporary access to objects without sharing cre
 
 ```bash
 # Generate a presigned URL for downloading (valid for 1 hour)
-aws --endpoint-url http://localhost:8080 s3 presign s3://my-bucket/file.txt --expires-in 3600
+aws --endpoint-url http://localhost:5553 s3 presign s3://my-bucket/file.txt --expires-in 3600
 
 # Generate a presigned URL for uploading
-aws --endpoint-url http://localhost:8080 s3 presign s3://my-bucket/new-file.txt --expires-in 3600
+aws --endpoint-url http://localhost:5553 s3 presign s3://my-bucket/new-file.txt --expires-in 3600
 ```
 
 The generated URL can be used directly with `curl` or any HTTP client:
 
 ```bash
 # Download using presigned URL
-curl -o file.txt "http://localhost:8080/my-bucket/file.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&..."
+curl -o file.txt "http://localhost:5553/my-bucket/file.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&..."
 
 # Upload using presigned URL
-curl -X PUT -T file.txt "http://localhost:8080/my-bucket/file.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&..."
+curl -X PUT -T file.txt "http://localhost:5553/my-bucket/file.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&..."
 ```
 
 Presigned URL parameters:
@@ -171,7 +171,7 @@ Example Prometheus scrape config:
 scrape_configs:
   - job_name: 'sss'
     static_configs:
-      - targets: ['localhost:8080']
+      - targets: ['localhost:5553']
 ```
 
 ## Storage Layout
@@ -208,7 +208,7 @@ server {
     ssl_certificate_key /path/to/key.pem;
 
     location / {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:5553;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }

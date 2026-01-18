@@ -6,7 +6,7 @@ storage:
   multipart_path: "/var/lib/sss/tmp"
 
 server:
-  address: ":8080"
+  address: ":5553"
 
 credentials:
   - access_key_id: "AKIAIOSFODNN7EXAMPLE"
