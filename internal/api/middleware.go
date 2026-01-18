@@ -312,3 +312,27 @@ func RequireWritePrivilege(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// MetricsBasicAuth creates middleware that requires basic auth for the metrics endpoint.
+// If username and password are both empty, anonymous access is allowed.
+func MetricsBasicAuth(username, password string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Allow anonymous access if no credentials are configured
+			if username == "" && password == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Check basic auth credentials
+			u, p, ok := r.BasicAuth()
+			if !ok || u != username || p != password {
+				w.Header().Set("WWW-Authenticate", `Basic realm="metrics"`)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}

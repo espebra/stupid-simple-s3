@@ -62,12 +62,23 @@ type Server struct {
 	Address string
 }
 
+type MetricsAuth struct {
+	Username string
+	Password string
+}
+
+// Enabled returns true if metrics authentication is configured
+func (m *MetricsAuth) Enabled() bool {
+	return m.Username != "" && m.Password != ""
+}
+
 type Config struct {
 	Bucket      Bucket
 	Storage     Storage
 	Server      Server
 	Credentials []Credential
 	Cleanup     Cleanup
+	MetricsAuth MetricsAuth
 }
 
 // Load creates a configuration from environment variables.
@@ -84,6 +95,8 @@ type Config struct {
 //   - STUPID_RO_SECRET_KEY: Read-only user secret key
 //   - STUPID_RW_ACCESS_KEY: Read-write user access key
 //   - STUPID_RW_SECRET_KEY: Read-write user secret key
+//   - STUPID_METRICS_USERNAME: Username for /metrics basic auth (optional)
+//   - STUPID_METRICS_PASSWORD: Password for /metrics basic auth (optional)
 func Load() (*Config, error) {
 	host := os.Getenv("STUPID_HOST")
 	if host == "" {
@@ -121,6 +134,10 @@ func Load() (*Config, error) {
 			Enabled:  os.Getenv("STUPID_CLEANUP_ENABLED") != "false",
 			Interval: getEnvOrDefault("STUPID_CLEANUP_INTERVAL", "1h"),
 			MaxAge:   getEnvOrDefault("STUPID_CLEANUP_MAX_AGE", "24h"),
+		},
+		MetricsAuth: MetricsAuth{
+			Username: os.Getenv("STUPID_METRICS_USERNAME"),
+			Password: os.Getenv("STUPID_METRICS_PASSWORD"),
 		},
 	}
 
