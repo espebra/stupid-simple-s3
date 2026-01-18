@@ -23,7 +23,7 @@ The service is configured using environment variables:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `STUPID_HOST` | Listen host | `localhost` |
+| `STUPID_HOST` | Listen host | (all interfaces) |
 | `STUPID_PORT` | Listen port | `5553` |
 | `STUPID_BUCKET_NAME` | Bucket name | (required) |
 | `STUPID_STORAGE_PATH` | Storage path for objects | `/var/lib/stupid/data` |

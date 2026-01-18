@@ -84,7 +84,7 @@ type Config struct {
 
 // Load creates a configuration from environment variables.
 // Environment variables:
-//   - STUPID_HOST: Listen host (default: "localhost")
+//   - STUPID_HOST: Listen host (default: all interfaces)
 //   - STUPID_PORT: Listen port (default: "5553")
 //   - STUPID_BUCKET_NAME: Bucket name (required)
 //   - STUPID_STORAGE_PATH: Storage path (default: "/var/lib/stupid/data")
@@ -100,9 +100,6 @@ type Config struct {
 //   - STUPID_METRICS_PASSWORD: Password for /metrics basic auth (optional)
 func Load() (*Config, error) {
 	host := os.Getenv("STUPID_HOST")
-	if host == "" {
-		host = "localhost"
-	}
 	port := os.Getenv("STUPID_PORT")
 	if port == "" {
 		port = "5553"
