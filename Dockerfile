@@ -11,15 +11,15 @@ COPY cmd/ cmd/
 COPY internal/ internal/
 
 # Build static binary
-RUN CGO_ENABLED=0 go build -mod=vendor -ldflags="-s -w" -o sss ./cmd/sss
+RUN CGO_ENABLED=0 go build -mod=vendor -ldflags="-s -w" -o stupid-simple-s3 ./cmd/sss
 
 FROM gcr.io/distroless/static:nonroot
 
-COPY --from=builder /build/sss /sss
+COPY --from=builder /build/stupid-simple-s3 /stupid-simple-s3
 
 USER nonroot:nonroot
 
 EXPOSE 5553
 
-ENTRYPOINT ["/sss"]
+ENTRYPOINT ["/stupid-simple-s3"]
 CMD ["-config", "/etc/sss/config.yaml"]

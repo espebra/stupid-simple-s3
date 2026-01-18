@@ -119,7 +119,7 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p release
-          cp artifacts/binaries/sss-* release/
+          cp artifacts/binaries/stupid-simple-s3-* release/
           cp artifacts/package-*/*.deb artifacts/package-*/*.rpm release/ 2>/dev/null || true
           cd release
           sha256sum * > checksums.txt

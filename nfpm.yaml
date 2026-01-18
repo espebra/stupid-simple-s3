@@ -9,11 +9,11 @@ homepage: https://github.com/espebra/stupid-simple-s3
 license: BSD-2-Clause
 
 contents:
-  - src: ./bin/sss-linux-${ARCH}
-    dst: /usr/bin/sss
+  - src: ./bin/stupid-simple-s3-linux-${ARCH}
+    dst: /usr/bin/stupid-simple-s3
 
-  - src: ./packaging/sss.service
-    dst: /lib/systemd/system/sss.service
+  - src: ./packaging/stupid-simple-s3.service
+    dst: /lib/systemd/system/stupid-simple-s3.service
 
   - src: ./packaging/config.yaml
     dst: /etc/sss/config.yaml

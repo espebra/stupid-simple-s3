@@ -7,7 +7,7 @@ After=network.target
 Type=simple
 User=sss
 Group=sss
-ExecStart=/usr/bin/sss -config /etc/sss/config.yaml
+ExecStart=/usr/bin/stupid-simple-s3 -config /etc/sss/config.yaml
 Restart=on-failure
 RestartSec=5
 

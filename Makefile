@@ -1,6 +1,6 @@
 .PHONY: build run test bench clean vendor fmt fmt-check
 
-BINARY_NAME=sss
+BINARY_NAME=stupid-simple-s3
 BUILD_DIR=bin
 
 build:
