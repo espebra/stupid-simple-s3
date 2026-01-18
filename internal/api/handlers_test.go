@@ -10,122 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/espen/stupid-simple-s3/internal/config"
 	"github.com/espen/stupid-simple-s3/internal/s3"
 	"github.com/espen/stupid-simple-s3/internal/storage"
 )
-
-func setupTestServer(t *testing.T) (*Server, func()) {
-	t.Helper()
-
-	tmpDir, err := os.MkdirTemp("", "sss-api-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-
-	cfg := &config.Config{
-		Bucket: config.Bucket{Name: "test-bucket"},
-		Storage: config.Storage{
-			Path:          filepath.Join(tmpDir, "data"),
-			MultipartPath: filepath.Join(tmpDir, "multipart"),
-		},
-		Server: config.Server{Address: ":8080"},
-		Credentials: []config.Credential{
-			{
-				AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
-				SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-				Privileges:      config.PrivilegeReadWrite,
-			},
-			{
-				AccessKeyID:     "AKIAREADONLY",
-				SecretAccessKey: "readonlysecretkey12345678901234567890",
-				Privileges:      config.PrivilegeRead,
-			},
-		},
-	}
-
-	store, err := storage.NewFilesystemStorage(cfg.Storage.Path, cfg.Storage.MultipartPath)
-	if err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("failed to create storage: %v", err)
-	}
-
-	server := NewServer(cfg, store)
-
-	cleanup := func() {
-		os.RemoveAll(tmpDir)
-	}
-
-	return server, cleanup
-}
-
-// signRequest adds AWS SigV4 authentication headers to a request
-func signRequest(t *testing.T, req *http.Request, accessKeyID, secretKey string) {
-	t.Helper()
-
-	now := time.Now().UTC()
-	amzDate := now.Format("20060102T150405Z")
-	dateStamp := now.Format("20060102")
-
-	req.Header.Set("X-Amz-Date", amzDate)
-	req.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
-
-	if req.Host == "" {
-		req.Host = "localhost:8080"
-	}
-
-	// Build signature (simplified for testing)
-	signedHeaders := "host;x-amz-content-sha256;x-amz-date"
-	credentialScope := dateStamp + "/us-east-1/s3/aws4_request"
-
-	// For these tests, we use a helper that computes the actual signature
-	signature := computeSignature(req, secretKey, dateStamp, signedHeaders)
-
-	authHeader := "AWS4-HMAC-SHA256 Credential=" + accessKeyID + "/" + credentialScope +
-		", SignedHeaders=" + signedHeaders +
-		", Signature=" + signature
-
-	req.Header.Set("Authorization", authHeader)
-}
-
-// computeSignature calculates the actual AWS SigV4 signature
-func computeSignature(req *http.Request, secretKey, dateStamp, signedHeadersStr string) string {
-	// Import crypto packages inline
-	import_crypto_hmac := func(key, data []byte) []byte {
-		h := hmacNew(key)
-		h.Write(data)
-		return h.Sum(nil)
-	}
-
-	import_crypto_sha256 := func(data []byte) []byte {
-		h := sha256New()
-		h.Write(data)
-		return h.Sum(nil)
-	}
-
-	// These are placeholders - in real tests we'd use the auth package
-	_ = import_crypto_hmac
-	_ = import_crypto_sha256
-
-	// For simplicity in handler tests, use mock signature
-	// Real signature verification is tested in auth/sigv4_test.go
-	return strings.Repeat("a", 64)
-}
-
-// Placeholder functions (handler tests focus on HTTP behavior, not auth)
-func hmacNew(key []byte) hashWriter { return &mockHash{} }
-func sha256New() hashWriter         { return &mockHash{} }
-
-type hashWriter interface {
-	Write([]byte) (int, error)
-	Sum([]byte) []byte
-}
-type mockHash struct{}
-
-func (m *mockHash) Write(b []byte) (int, error) { return len(b), nil }
-func (m *mockHash) Sum(b []byte) []byte         { return make([]byte, 32) }
 
 // Since auth testing is complex, we'll test handlers without auth middleware
 func setupTestHandlers(t *testing.T) (*Handlers, *config.Config, func()) {
@@ -188,7 +77,7 @@ func TestHeadBucket(t *testing.T) {
 
 		// Verify error response
 		var errResp s3.Error
-		xml.NewDecoder(w.Body).Decode(&errResp)
+		_ = xml.NewDecoder(w.Body).Decode(&errResp)
 		if errResp.Code != s3.ErrNoSuchBucket {
 			t.Errorf("error code = %q, want %q", errResp.Code, s3.ErrNoSuchBucket)
 		}
@@ -261,7 +150,7 @@ func TestGetObjectNotFound(t *testing.T) {
 	}
 
 	var errResp s3.Error
-	xml.NewDecoder(w.Body).Decode(&errResp)
+	_ = xml.NewDecoder(w.Body).Decode(&errResp)
 	if errResp.Code != s3.ErrNoSuchKey {
 		t.Errorf("error code = %q, want %q", errResp.Code, s3.ErrNoSuchKey)
 	}
@@ -419,7 +308,7 @@ func TestWrongBucket(t *testing.T) {
 			}
 
 			var errResp s3.Error
-			xml.NewDecoder(w.Body).Decode(&errResp)
+			_ = xml.NewDecoder(w.Body).Decode(&errResp)
 			if errResp.Code != s3.ErrNoSuchBucket {
 				t.Errorf("error code = %q, want %q", errResp.Code, s3.ErrNoSuchBucket)
 			}
@@ -561,7 +450,7 @@ func TestAbortMultipartUpload(t *testing.T) {
 	handlers.CreateMultipartUpload(createW, createReq)
 
 	var createResult s3.InitiateMultipartUploadResult
-	xml.NewDecoder(createW.Body).Decode(&createResult)
+	_ = xml.NewDecoder(createW.Body).Decode(&createResult)
 	uploadID := createResult.UploadID
 
 	// Upload a part
@@ -626,7 +515,7 @@ func TestPostObjectRouting(t *testing.T) {
 		handlers.CreateMultipartUpload(createW, createReq)
 
 		var createResult s3.InitiateMultipartUploadResult
-		xml.NewDecoder(createW.Body).Decode(&createResult)
+		_ = xml.NewDecoder(createW.Body).Decode(&createResult)
 
 		// Now test routing to complete
 		req := httptest.NewRequest("POST", "/test-bucket/test.txt?uploadId="+createResult.UploadID, strings.NewReader("<CompleteMultipartUpload></CompleteMultipartUpload>"))
@@ -640,7 +529,7 @@ func TestPostObjectRouting(t *testing.T) {
 		// The important thing is it didn't return InvalidRequest
 		if w.Code == http.StatusBadRequest {
 			var errResp s3.Error
-			xml.NewDecoder(w.Body).Decode(&errResp)
+			_ = xml.NewDecoder(w.Body).Decode(&errResp)
 			if errResp.Code == s3.ErrInvalidRequest {
 				t.Error("should have routed to CompleteMultipartUpload, not returned InvalidRequest")
 			}
@@ -660,7 +549,7 @@ func TestPostObjectRouting(t *testing.T) {
 		}
 
 		var errResp s3.Error
-		xml.NewDecoder(w.Body).Decode(&errResp)
+		_ = xml.NewDecoder(w.Body).Decode(&errResp)
 		if errResp.Code != s3.ErrInvalidRequest {
 			t.Errorf("error code = %q, want %q", errResp.Code, s3.ErrInvalidRequest)
 		}

@@ -595,9 +595,15 @@ func TestListParts(t *testing.T) {
 	}
 
 	// Upload parts out of order
-	storage.UploadPart(uploadID, 3, bytes.NewReader([]byte("part 3")))
-	storage.UploadPart(uploadID, 1, bytes.NewReader([]byte("part 1")))
-	storage.UploadPart(uploadID, 2, bytes.NewReader([]byte("part 2")))
+	if _, err := storage.UploadPart(uploadID, 3, bytes.NewReader([]byte("part 3"))); err != nil {
+		t.Fatalf("UploadPart failed: %v", err)
+	}
+	if _, err := storage.UploadPart(uploadID, 1, bytes.NewReader([]byte("part 1"))); err != nil {
+		t.Fatalf("UploadPart failed: %v", err)
+	}
+	if _, err := storage.UploadPart(uploadID, 2, bytes.NewReader([]byte("part 2"))); err != nil {
+		t.Fatalf("UploadPart failed: %v", err)
+	}
 
 	parts, err := storage.ListParts(uploadID)
 	if err != nil {
@@ -633,7 +639,9 @@ func TestListObjects(t *testing.T) {
 	}
 
 	for _, key := range objects {
-		storage.PutObject(key, "text/plain", nil, bytes.NewReader([]byte("content")))
+		if _, err := storage.PutObject(key, "text/plain", nil, bytes.NewReader([]byte("content"))); err != nil {
+			t.Fatalf("PutObject failed: %v", err)
+		}
 	}
 
 	t.Run("list all objects", func(t *testing.T) {

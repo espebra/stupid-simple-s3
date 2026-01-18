@@ -39,7 +39,9 @@ func (r *awsChunkedReader) Read(p []byte) (n int, err error) {
 
 			if chunkSize == 0 {
 				// Final chunk - read trailing CRLF
-				r.reader.ReadString('\n')
+				if _, err := r.reader.ReadString('\n'); err != nil && err != io.EOF {
+					return n, err
+				}
 				r.eof = true
 				return n, io.EOF
 			}
@@ -64,7 +66,9 @@ func (r *awsChunkedReader) Read(p []byte) (n int, err error) {
 
 		// If we've read the entire chunk, consume the trailing CRLF
 		if r.remaining == 0 {
-			r.reader.ReadString('\n') // Read trailing \r\n
+			if _, err := r.reader.ReadString('\n'); err != nil && err != io.EOF {
+				return n, err
+			}
 		}
 	}
 
@@ -110,24 +114,6 @@ func isAWSChunkedEncoding(contentEncoding, contentSha256 string) bool {
 		return true
 	}
 	return false
-}
-
-// getRequestBody returns the appropriate reader for the request body
-// If the request uses AWS chunked encoding, it wraps the body in a decoder
-func getRequestBody(body io.ReadCloser, contentEncoding, contentSha256 string) io.Reader {
-	if isAWSChunkedEncoding(contentEncoding, contentSha256) {
-		return newAWSChunkedReader(body)
-	}
-	return body
-}
-
-// readAllWithChunkedSupport reads all data from a reader, handling AWS chunked encoding
-func readAllWithChunkedSupport(r io.Reader, contentEncoding, contentSha256 string) ([]byte, error) {
-	if isAWSChunkedEncoding(contentEncoding, contentSha256) {
-		chunkedReader := newAWSChunkedReader(r)
-		return io.ReadAll(chunkedReader)
-	}
-	return io.ReadAll(r)
 }
 
 // wrapBodyIfChunked wraps the request body if it uses AWS chunked encoding
