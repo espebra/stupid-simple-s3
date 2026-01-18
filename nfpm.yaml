@@ -1,0 +1,31 @@
+name: sss
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+maintainer: Espen Braastad
+description: A minimal S3-compatible object storage service
+vendor: espebra
+homepage: https://github.com/espebra/stupid-simple-s3
+license: BSD-2-Clause
+
+contents:
+  - src: ./bin/sss-linux-${ARCH}
+    dst: /usr/bin/sss
+
+  - src: ./packaging/sss.service
+    dst: /lib/systemd/system/sss.service
+
+  - src: ./packaging/config.yaml
+    dst: /etc/sss/config.yaml
+    type: config|noreplace
+
+scripts:
+  postinstall: ./packaging/postinstall.sh
+
+overrides:
+  deb:
+    depends:
+      - systemd
+  rpm:
+    depends:
+      - systemd

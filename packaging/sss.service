@@ -1,0 +1,22 @@
+[Unit]
+Description=Stupid Simple S3
+Documentation=https://github.com/espebra/stupid-simple-s3
+After=network.target
+
+[Service]
+Type=simple
+User=sss
+Group=sss
+ExecStart=/usr/bin/sss -config /etc/sss/config.yaml
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/sss
+
+[Install]
+WantedBy=multi-user.target
