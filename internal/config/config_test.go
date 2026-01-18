@@ -2,43 +2,50 @@ package config
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 )
 
-func TestLoadConfig(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "sss-config-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
+func TestLoad(t *testing.T) {
+	// Save original environment and restore after test
+	origEnv := map[string]string{
+		"STUPID_HOST":             os.Getenv("STUPID_HOST"),
+		"STUPID_PORT":             os.Getenv("STUPID_PORT"),
+		"STUPID_BUCKET_NAME":      os.Getenv("STUPID_BUCKET_NAME"),
+		"STUPID_STORAGE_PATH":     os.Getenv("STUPID_STORAGE_PATH"),
+		"STUPID_MULTIPART_PATH":   os.Getenv("STUPID_MULTIPART_PATH"),
+		"STUPID_CLEANUP_ENABLED":  os.Getenv("STUPID_CLEANUP_ENABLED"),
+		"STUPID_CLEANUP_INTERVAL": os.Getenv("STUPID_CLEANUP_INTERVAL"),
+		"STUPID_CLEANUP_MAX_AGE":  os.Getenv("STUPID_CLEANUP_MAX_AGE"),
+		"STUPID_RO_ACCESS_KEY":    os.Getenv("STUPID_RO_ACCESS_KEY"),
+		"STUPID_RO_SECRET_KEY":    os.Getenv("STUPID_RO_SECRET_KEY"),
+		"STUPID_RW_ACCESS_KEY":    os.Getenv("STUPID_RW_ACCESS_KEY"),
+		"STUPID_RW_SECRET_KEY":    os.Getenv("STUPID_RW_SECRET_KEY"),
 	}
-	defer os.RemoveAll(tmpDir)
-
-	t.Run("valid config", func(t *testing.T) {
-		configContent := `
-bucket:
-  name: "test-bucket"
-
-storage:
-  path: "/var/lib/sss/data"
-  multipart_path: "/var/lib/sss/tmp"
-
-server:
-  address: ":8080"
-
-credentials:
-  - access_key_id: "AKIAIOSFODNN7EXAMPLE"
-    secret_access_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-    privileges: "read-write"
-  - access_key_id: "AKIAREADONLY"
-    secret_access_key: "readonlysecret1234567890123456789012"
-    privileges: "read"
-`
-		configPath := filepath.Join(tmpDir, "valid.yaml")
-		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-			t.Fatalf("failed to write config: %v", err)
+	defer func() {
+		for k, v := range origEnv {
+			if v == "" {
+				os.Unsetenv(k)
+			} else {
+				os.Setenv(k, v)
+			}
 		}
+	}()
 
-		cfg, err := Load(configPath)
+	clearEnv := func() {
+		for k := range origEnv {
+			os.Unsetenv(k)
+		}
+	}
+
+	t.Run("valid config with read-write credential", func(t *testing.T) {
+		clearEnv()
+		os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
+		os.Setenv("STUPID_STORAGE_PATH", "/var/lib/data")
+		os.Setenv("STUPID_MULTIPART_PATH", "/var/lib/tmp")
+		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIAIOSFODNN7EXAMPLE")
+		os.Setenv("STUPID_RW_SECRET_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+
+		cfg, err := Load()
 		if err != nil {
 			t.Fatalf("Load failed: %v", err)
 		}
@@ -46,136 +53,175 @@ credentials:
 		if cfg.Bucket.Name != "test-bucket" {
 			t.Errorf("Bucket.Name = %q, want %q", cfg.Bucket.Name, "test-bucket")
 		}
-		if cfg.Storage.Path != "/var/lib/sss/data" {
-			t.Errorf("Storage.Path = %q, want %q", cfg.Storage.Path, "/var/lib/sss/data")
+		if cfg.Storage.Path != "/var/lib/data" {
+			t.Errorf("Storage.Path = %q, want %q", cfg.Storage.Path, "/var/lib/data")
 		}
-		if cfg.Server.Address != ":8080" {
-			t.Errorf("Server.Address = %q, want %q", cfg.Server.Address, ":8080")
+		if cfg.Server.Address != "localhost:5553" {
+			t.Errorf("Server.Address = %q, want %q", cfg.Server.Address, "localhost:5553")
 		}
-		if len(cfg.Credentials) != 2 {
-			t.Errorf("len(Credentials) = %d, want 2", len(cfg.Credentials))
+		if len(cfg.Credentials) != 1 {
+			t.Errorf("len(Credentials) = %d, want 1", len(cfg.Credentials))
 		}
 		if cfg.Credentials[0].Privileges != PrivilegeReadWrite {
 			t.Errorf("Credentials[0].Privileges = %q, want %q", cfg.Credentials[0].Privileges, PrivilegeReadWrite)
 		}
-		if cfg.Credentials[1].Privileges != PrivilegeRead {
-			t.Errorf("Credentials[1].Privileges = %q, want %q", cfg.Credentials[1].Privileges, PrivilegeRead)
+	})
+
+	t.Run("valid config with both credentials", func(t *testing.T) {
+		clearEnv()
+		os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
+		os.Setenv("STUPID_STORAGE_PATH", "/var/lib/data")
+		os.Setenv("STUPID_MULTIPART_PATH", "/var/lib/tmp")
+		os.Setenv("STUPID_RO_ACCESS_KEY", "AKIAREADONLY")
+		os.Setenv("STUPID_RO_SECRET_KEY", "readonlysecret")
+		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIAREADWRITE")
+		os.Setenv("STUPID_RW_SECRET_KEY", "readwritesecret")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+
+		if len(cfg.Credentials) != 2 {
+			t.Errorf("len(Credentials) = %d, want 2", len(cfg.Credentials))
+		}
+		if cfg.Credentials[0].Privileges != PrivilegeRead {
+			t.Errorf("Credentials[0].Privileges = %q, want %q", cfg.Credentials[0].Privileges, PrivilegeRead)
+		}
+		if cfg.Credentials[1].Privileges != PrivilegeReadWrite {
+			t.Errorf("Credentials[1].Privileges = %q, want %q", cfg.Credentials[1].Privileges, PrivilegeReadWrite)
 		}
 	})
 
-	t.Run("missing file", func(t *testing.T) {
-		_, err := Load("/nonexistent/config.yaml")
-		if err == nil {
-			t.Error("expected error for missing file")
+	t.Run("custom host and port", func(t *testing.T) {
+		clearEnv()
+		os.Setenv("STUPID_HOST", "127.0.0.1")
+		os.Setenv("STUPID_PORT", "9000")
+		os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
+		os.Setenv("STUPID_STORAGE_PATH", "/var/lib/data")
+		os.Setenv("STUPID_MULTIPART_PATH", "/var/lib/tmp")
+		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
+		os.Setenv("STUPID_RW_SECRET_KEY", "secret")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+
+		if cfg.Server.Address != "127.0.0.1:9000" {
+			t.Errorf("Server.Address = %q, want %q", cfg.Server.Address, "127.0.0.1:9000")
 		}
 	})
 
-	t.Run("invalid yaml", func(t *testing.T) {
-		configPath := filepath.Join(tmpDir, "invalid.yaml")
-		if err := os.WriteFile(configPath, []byte("not: valid: yaml: ["), 0644); err != nil {
-			t.Fatalf("failed to write config: %v", err)
+	t.Run("cleanup enabled by default", func(t *testing.T) {
+		clearEnv()
+		os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
+		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
+		os.Setenv("STUPID_RW_SECRET_KEY", "secret")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
 		}
 
-		_, err := Load(configPath)
-		if err == nil {
-			t.Error("expected error for invalid YAML")
+		if !cfg.Cleanup.Enabled {
+			t.Error("Cleanup.Enabled = false, want true (default)")
+		}
+	})
+
+	t.Run("cleanup disabled explicitly", func(t *testing.T) {
+		clearEnv()
+		os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
+		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
+		os.Setenv("STUPID_RW_SECRET_KEY", "secret")
+		os.Setenv("STUPID_CLEANUP_ENABLED", "false")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+
+		if cfg.Cleanup.Enabled {
+			t.Error("Cleanup.Enabled = true, want false")
+		}
+	})
+
+	t.Run("cleanup custom interval and max age", func(t *testing.T) {
+		clearEnv()
+		os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
+		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
+		os.Setenv("STUPID_RW_SECRET_KEY", "secret")
+		os.Setenv("STUPID_CLEANUP_INTERVAL", "30m")
+		os.Setenv("STUPID_CLEANUP_MAX_AGE", "12h")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+
+		if cfg.Cleanup.Interval != "30m" {
+			t.Errorf("Cleanup.Interval = %q, want %q", cfg.Cleanup.Interval, "30m")
+		}
+		if cfg.Cleanup.MaxAge != "12h" {
+			t.Errorf("Cleanup.MaxAge = %q, want %q", cfg.Cleanup.MaxAge, "12h")
 		}
 	})
 
 	t.Run("missing bucket name", func(t *testing.T) {
-		configContent := `
-bucket:
-  name: ""
-storage:
-  path: "/data"
-  multipart_path: "/tmp"
-server:
-  address: ":8080"
-credentials:
-  - access_key_id: "AKIA"
-    secret_access_key: "secret"
-    privileges: "read"
-`
-		configPath := filepath.Join(tmpDir, "no-bucket.yaml")
-		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-			t.Fatalf("failed to write config: %v", err)
-		}
+		clearEnv()
+		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
+		os.Setenv("STUPID_RW_SECRET_KEY", "secret")
 
-		_, err := Load(configPath)
+		_, err := Load()
 		if err == nil {
 			t.Error("expected error for missing bucket name")
 		}
 	})
 
-	t.Run("missing storage path", func(t *testing.T) {
-		configContent := `
-bucket:
-  name: "bucket"
-storage:
-  path: ""
-  multipart_path: "/tmp"
-server:
-  address: ":8080"
-credentials:
-  - access_key_id: "AKIA"
-    secret_access_key: "secret"
-    privileges: "read"
-`
-		configPath := filepath.Join(tmpDir, "no-storage.yaml")
-		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-			t.Fatalf("failed to write config: %v", err)
+	t.Run("default storage paths", func(t *testing.T) {
+		clearEnv()
+		os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
+		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
+		os.Setenv("STUPID_RW_SECRET_KEY", "secret")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
 		}
 
-		_, err := Load(configPath)
-		if err == nil {
-			t.Error("expected error for missing storage path")
+		if cfg.Storage.Path != "/var/lib/stupid/data" {
+			t.Errorf("Storage.Path = %q, want %q", cfg.Storage.Path, "/var/lib/stupid/data")
+		}
+		if cfg.Storage.MultipartPath != "/var/lib/stupid/tmp" {
+			t.Errorf("Storage.MultipartPath = %q, want %q", cfg.Storage.MultipartPath, "/var/lib/stupid/tmp")
 		}
 	})
 
 	t.Run("no credentials", func(t *testing.T) {
-		configContent := `
-bucket:
-  name: "bucket"
-storage:
-  path: "/data"
-  multipart_path: "/tmp"
-server:
-  address: ":8080"
-credentials: []
-`
-		configPath := filepath.Join(tmpDir, "no-creds.yaml")
-		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-			t.Fatalf("failed to write config: %v", err)
-		}
+		clearEnv()
+		os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
 
-		_, err := Load(configPath)
+		_, err := Load()
 		if err == nil {
 			t.Error("expected error for no credentials")
 		}
 	})
 
-	t.Run("invalid privilege", func(t *testing.T) {
-		configContent := `
-bucket:
-  name: "bucket"
-storage:
-  path: "/data"
-  multipart_path: "/tmp"
-server:
-  address: ":8080"
-credentials:
-  - access_key_id: "AKIA"
-    secret_access_key: "secret"
-    privileges: "invalid"
-`
-		configPath := filepath.Join(tmpDir, "bad-priv.yaml")
-		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-			t.Fatalf("failed to write config: %v", err)
+	t.Run("partial read-only credential ignored", func(t *testing.T) {
+		clearEnv()
+		os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
+		os.Setenv("STUPID_RO_ACCESS_KEY", "AKIA") // missing secret
+		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA2")
+		os.Setenv("STUPID_RW_SECRET_KEY", "secret2")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
 		}
 
-		_, err := Load(configPath)
-		if err == nil {
-			t.Error("expected error for invalid privilege")
+		// Should only have the read-write credential
+		if len(cfg.Credentials) != 1 {
+			t.Errorf("len(Credentials) = %d, want 1", len(cfg.Credentials))
 		}
 	})
 }

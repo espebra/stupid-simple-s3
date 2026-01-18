@@ -1,4 +1,4 @@
-name: sss
+name: stupid-simple-s3
 arch: ${ARCH}
 platform: linux
 version: ${VERSION}
@@ -14,10 +14,6 @@ contents:
 
   - src: ./packaging/stupid-simple-s3.service
     dst: /lib/systemd/system/stupid-simple-s3.service
-
-  - src: ./packaging/config.yaml
-    dst: /etc/sss/config.yaml
-    type: config|noreplace
 
 scripts:
   postinstall: ./packaging/postinstall.sh

@@ -22,14 +22,22 @@ type FilesystemStorage struct {
 
 // NewFilesystemStorage creates a new filesystem-backed storage
 func NewFilesystemStorage(basePath, multipartPath string) (*FilesystemStorage, error) {
-	// Create base directories
+	// Create base directories if they don't exist
 	objectsPath := filepath.Join(basePath, "objects")
-	if err := os.MkdirAll(objectsPath, 0755); err != nil {
-		return nil, fmt.Errorf("creating objects directory: %w", err)
+	if _, err := os.Stat(objectsPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(objectsPath, 0755); err != nil {
+			return nil, fmt.Errorf("creating objects directory: %w", err)
+		}
+	} else if err != nil {
+		return nil, fmt.Errorf("checking objects directory: %w", err)
 	}
 
-	if err := os.MkdirAll(multipartPath, 0755); err != nil {
-		return nil, fmt.Errorf("creating multipart directory: %w", err)
+	if _, err := os.Stat(multipartPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(multipartPath, 0755); err != nil {
+			return nil, fmt.Errorf("creating multipart directory: %w", err)
+		}
+	} else if err != nil {
+		return nil, fmt.Errorf("checking multipart directory: %w", err)
 	}
 
 	return &FilesystemStorage{

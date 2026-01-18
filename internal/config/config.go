@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"os"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 type Privilege string
@@ -16,24 +14,24 @@ const (
 )
 
 type Credential struct {
-	AccessKeyID     string    `yaml:"access_key_id"`
-	SecretAccessKey string    `yaml:"secret_access_key"`
-	Privileges      Privilege `yaml:"privileges"`
+	AccessKeyID     string
+	SecretAccessKey string
+	Privileges      Privilege
 }
 
 type Bucket struct {
-	Name string `yaml:"name"`
+	Name string
 }
 
 type Storage struct {
-	Path          string `yaml:"path"`
-	MultipartPath string `yaml:"multipart_path"`
+	Path          string
+	MultipartPath string
 }
 
 type Cleanup struct {
-	Enabled  bool   `yaml:"enabled"`
-	Interval string `yaml:"interval"`
-	MaxAge   string `yaml:"max_age"`
+	Enabled  bool
+	Interval string
+	MaxAge   string
 }
 
 // GetInterval returns the cleanup interval as a duration, defaulting to 1 hour
@@ -61,33 +59,105 @@ func (c *Cleanup) GetMaxAge() time.Duration {
 }
 
 type Server struct {
-	Address string `yaml:"address"`
+	Address string
 }
 
 type Config struct {
-	Bucket      Bucket       `yaml:"bucket"`
-	Storage     Storage      `yaml:"storage"`
-	Server      Server       `yaml:"server"`
-	Credentials []Credential `yaml:"credentials"`
-	Cleanup     Cleanup      `yaml:"cleanup"`
+	Bucket      Bucket
+	Storage     Storage
+	Server      Server
+	Credentials []Credential
+	Cleanup     Cleanup
 }
 
-func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("reading config file: %w", err)
+// Load creates a configuration from environment variables.
+// Environment variables:
+//   - STUPID_HOST: Listen host (default: "localhost")
+//   - STUPID_PORT: Listen port (default: "5553")
+//   - STUPID_BUCKET_NAME: Bucket name (required)
+//   - STUPID_STORAGE_PATH: Storage path (default: "/var/lib/stupid/data")
+//   - STUPID_MULTIPART_PATH: Multipart storage path (default: "/var/lib/stupid/tmp")
+//   - STUPID_CLEANUP_ENABLED: Enable cleanup job (default: "true")
+//   - STUPID_CLEANUP_INTERVAL: Cleanup interval (default: "1h")
+//   - STUPID_CLEANUP_MAX_AGE: Max age for stale uploads (default: "24h")
+//   - STUPID_RO_ACCESS_KEY: Read-only user access key
+//   - STUPID_RO_SECRET_KEY: Read-only user secret key
+//   - STUPID_RW_ACCESS_KEY: Read-write user access key
+//   - STUPID_RW_SECRET_KEY: Read-write user secret key
+func Load() (*Config, error) {
+	host := os.Getenv("STUPID_HOST")
+	if host == "" {
+		host = "localhost"
+	}
+	port := os.Getenv("STUPID_PORT")
+	if port == "" {
+		port = "5553"
 	}
 
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parsing config file: %w", err)
+	address := host + ":" + port
+
+	storagePath := os.Getenv("STUPID_STORAGE_PATH")
+	if storagePath == "" {
+		storagePath = "/var/lib/stupid/data"
+	}
+
+	multipartPath := os.Getenv("STUPID_MULTIPART_PATH")
+	if multipartPath == "" {
+		multipartPath = "/var/lib/stupid/tmp"
+	}
+
+	cfg := &Config{
+		Bucket: Bucket{
+			Name: os.Getenv("STUPID_BUCKET_NAME"),
+		},
+		Storage: Storage{
+			Path:          storagePath,
+			MultipartPath: multipartPath,
+		},
+		Server: Server{
+			Address: address,
+		},
+		Cleanup: Cleanup{
+			Enabled:  os.Getenv("STUPID_CLEANUP_ENABLED") != "false",
+			Interval: getEnvOrDefault("STUPID_CLEANUP_INTERVAL", "1h"),
+			MaxAge:   getEnvOrDefault("STUPID_CLEANUP_MAX_AGE", "24h"),
+		},
+	}
+
+	// Add read-only credential if both key and secret are provided
+	roAccessKey := os.Getenv("STUPID_RO_ACCESS_KEY")
+	roSecretKey := os.Getenv("STUPID_RO_SECRET_KEY")
+	if roAccessKey != "" && roSecretKey != "" {
+		cfg.Credentials = append(cfg.Credentials, Credential{
+			AccessKeyID:     roAccessKey,
+			SecretAccessKey: roSecretKey,
+			Privileges:      PrivilegeRead,
+		})
+	}
+
+	// Add read-write credential if both key and secret are provided
+	rwAccessKey := os.Getenv("STUPID_RW_ACCESS_KEY")
+	rwSecretKey := os.Getenv("STUPID_RW_SECRET_KEY")
+	if rwAccessKey != "" && rwSecretKey != "" {
+		cfg.Credentials = append(cfg.Credentials, Credential{
+			AccessKeyID:     rwAccessKey,
+			SecretAccessKey: rwSecretKey,
+			Privileges:      PrivilegeReadWrite,
+		})
 	}
 
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("validating config: %w", err)
 	}
 
-	return &cfg, nil
+	return cfg, nil
+}
+
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }
 
 func (c *Config) validate() error {

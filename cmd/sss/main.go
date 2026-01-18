@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"log"
 	"os"
 	"time"
@@ -12,16 +11,15 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "config.yaml", "Path to configuration file")
-	flag.Parse()
-
-	// Load configuration
-	cfg, err := config.Load(*configPath)
+	// Load configuration from environment variables
+	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// Initialize storage
+	// Initialize storage (creates directories if they don't exist)
+	log.Printf("Storage path: %s", cfg.Storage.Path)
+	log.Printf("Multipart path: %s", cfg.Storage.MultipartPath)
 	store, err := storage.NewFilesystemStorage(cfg.Storage.Path, cfg.Storage.MultipartPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize storage: %v", err)

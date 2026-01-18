@@ -5,9 +5,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=sss
-Group=sss
-ExecStart=/usr/bin/stupid-simple-s3 -config /etc/sss/config.yaml
+User=stupid
+Group=stupid
+EnvironmentFile=-/etc/stupid-simple-s3/environment
+ExecStart=/usr/bin/stupid-simple-s3
 Restart=on-failure
 RestartSec=5
 
@@ -16,7 +17,7 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/var/lib/sss
+ReadWritePaths=/var/lib/stupid-simple-s3
 
 [Install]
 WantedBy=multi-user.target

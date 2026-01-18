@@ -1,18 +1,18 @@
 #!/bin/sh
 set -e
 
-# Create sss user and group if they don't exist
-if ! getent group sss >/dev/null; then
-    groupadd --system sss
+# Create stupid user and group if they don't exist
+if ! getent group stupid >/dev/null; then
+    groupadd --system stupid
 fi
 
-if ! getent passwd sss >/dev/null; then
-    useradd --system --gid sss --no-create-home --shell /usr/sbin/nologin sss
+if ! getent passwd stupid >/dev/null; then
+    useradd --system --gid stupid --no-create-home --shell /usr/sbin/nologin stupid
 fi
 
 # Create data directories
-mkdir -p /var/lib/sss/data /var/lib/sss/tmp
-chown -R sss:sss /var/lib/sss
+mkdir -p /var/lib/stupid-simple-s3/data /var/lib/stupid-simple-s3/tmp
+chown -R stupid:stupid /var/lib/stupid-simple-s3
 
 # Reload systemd
 systemctl daemon-reload || true

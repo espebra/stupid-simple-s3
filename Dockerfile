@@ -22,4 +22,3 @@ USER nonroot:nonroot
 EXPOSE 5553
 
 ENTRYPOINT ["/stupid-simple-s3"]
-CMD ["-config", "/etc/sss/config.yaml"]
