@@ -38,14 +38,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
       - uses: actions/download-artifact@v4
         with:
           name: binaries
           path: bin/
 
       - name: Install nfpm
-        run: |
-          curl -sfL https://github.com/goreleaser/nfpm/releases/download/v2.41.1/nfpm_2.41.1_linux_amd64.tar.gz | sudo tar xz -C /usr/local/bin nfpm
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
 
       - name: Build package
         run: |
