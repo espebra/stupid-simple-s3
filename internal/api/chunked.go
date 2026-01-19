@@ -96,6 +96,17 @@ func (r *awsChunkedReader) readChunkHeader() (int64, error) {
 		return 0, fmt.Errorf("invalid chunk size: %w", err)
 	}
 
+	// Validate chunk size to prevent overflow and bypass of size limits
+	// AWS S3 maximum chunk size is 64KB for streaming uploads, but we allow up to 64MB
+	// to be flexible with different client implementations
+	const maxChunkSize = 64 * 1024 * 1024
+	if size < 0 {
+		return 0, fmt.Errorf("invalid chunk size: negative value")
+	}
+	if size > maxChunkSize {
+		return 0, fmt.Errorf("invalid chunk size: exceeds maximum allowed")
+	}
+
 	return size, nil
 }
 
