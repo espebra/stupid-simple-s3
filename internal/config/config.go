@@ -76,8 +76,16 @@ func (c *Cleanup) GetMaxAge() time.Duration {
 
 type Server struct {
 	Address        string
-	TrustedProxies []string // List of trusted proxy IPs/CIDRs that can set X-Forwarded-For
+	TrustedProxies []string      // List of trusted proxy IPs/CIDRs that can set X-Forwarded-For
+	ReadTimeout    time.Duration // Maximum duration for reading entire request
+	WriteTimeout   time.Duration // Maximum duration for writing response
 }
+
+// DefaultReadTimeout is 30 minutes to allow large uploads
+const DefaultReadTimeout = 30 * time.Minute
+
+// DefaultWriteTimeout is 30 minutes to allow large downloads
+const DefaultWriteTimeout = 30 * time.Minute
 
 type MetricsAuth struct {
 	Username string
@@ -118,6 +126,8 @@ type Config struct {
 //   - STUPID_MAX_OBJECT_SIZE: Maximum object size in bytes (default: 5GB)
 //   - STUPID_MAX_PART_SIZE: Maximum multipart part size in bytes (default: 5GB)
 //   - STUPID_TRUSTED_PROXIES: Comma-separated list of trusted proxy IPs/CIDRs (optional)
+//   - STUPID_READ_TIMEOUT: Maximum duration for reading requests (default: "30m")
+//   - STUPID_WRITE_TIMEOUT: Maximum duration for writing responses (default: "30m")
 func Load() (*Config, error) {
 	host := os.Getenv("STUPID_HOST")
 	port := os.Getenv("STUPID_PORT")
@@ -159,6 +169,8 @@ func Load() (*Config, error) {
 		Server: Server{
 			Address:        address,
 			TrustedProxies: trustedProxies,
+			ReadTimeout:    parseEnvDuration("STUPID_READ_TIMEOUT", DefaultReadTimeout),
+			WriteTimeout:   parseEnvDuration("STUPID_WRITE_TIMEOUT", DefaultWriteTimeout),
 		},
 		Cleanup: Cleanup{
 			Enabled:  os.Getenv("STUPID_CLEANUP_ENABLED") != "false",
@@ -214,6 +226,15 @@ func getEnvOrDefault(key, defaultValue string) string {
 func parseEnvInt64(key string, defaultValue int64) int64 {
 	if value := os.Getenv(key); value != "" {
 		if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
+			return parsed
+		}
+	}
+	return defaultValue
+}
+
+func parseEnvDuration(key string, defaultValue time.Duration) time.Duration {
+	if value := os.Getenv(key); value != "" {
+		if parsed, err := time.ParseDuration(value); err == nil {
 			return parsed
 		}
 	}
@@ -279,6 +300,8 @@ func (c *Config) Log() {
 	log.Printf("  Max object size: %d bytes", c.Limits.MaxObjectSize)
 	log.Printf("  Max part size: %d bytes", c.Limits.MaxPartSize)
 	log.Printf("  Trusted proxies: %d configured", len(c.Server.TrustedProxies))
+	log.Printf("  Read timeout: %s", c.Server.ReadTimeout)
+	log.Printf("  Write timeout: %s", c.Server.WriteTimeout)
 	log.Printf("  Credentials: %d configured", len(c.Credentials))
 	for i, cred := range c.Credentials {
 		log.Printf("    [%d] Access key: %s, Privileges: %s", i, cred.AccessKeyID, cred.Privileges)

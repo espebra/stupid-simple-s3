@@ -17,14 +17,6 @@ const (
 	// This helps mitigate Slowloris attacks.
 	ReadHeaderTimeout = 10 * time.Second
 
-	// ReadTimeout is the maximum duration for reading the entire request.
-	// Set high to allow large object uploads.
-	ReadTimeout = 30 * time.Minute
-
-	// WriteTimeout is the maximum duration before timing out writes of the response.
-	// Set high to allow large object downloads.
-	WriteTimeout = 30 * time.Minute
-
 	// IdleTimeout is the maximum amount of time to wait for the next request.
 	IdleTimeout = 120 * time.Second
 
@@ -103,8 +95,8 @@ func (s *Server) ListenAndServe() error {
 		Addr:              s.cfg.Server.Address,
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: ReadHeaderTimeout,
-		ReadTimeout:       ReadTimeout,
-		WriteTimeout:      WriteTimeout,
+		ReadTimeout:       s.cfg.Server.ReadTimeout,
+		WriteTimeout:      s.cfg.Server.WriteTimeout,
 		IdleTimeout:       IdleTimeout,
 		MaxHeaderBytes:    MaxHeaderBytes,
 	}
