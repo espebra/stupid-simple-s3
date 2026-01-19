@@ -161,6 +161,9 @@ Available metrics:
 | `stupid_simple_s3_http_request_bytes_total` | Counter | Bytes received in request bodies |
 | `stupid_simple_s3_http_response_bytes_total` | Counter | Bytes sent in response bodies |
 | `stupid_simple_s3_errors_total` | Counter | Errors by operation and error code |
+| `stupid_simple_s3_multipart_uploads_active` | Gauge | Number of active multipart uploads |
+| `stupid_simple_s3_uploads_active` | Gauge | Number of currently active upload operations |
+| `stupid_simple_s3_downloads_active` | Gauge | Number of currently active download operations |
 | `stupid_simple_s3_auth_failures_total` | Counter | Authentication failures by reason |
 
 Example Prometheus scrape config:
