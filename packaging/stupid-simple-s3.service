@@ -1,23 +1,110 @@
 [Unit]
 Description=Stupid Simple S3
 Documentation=https://github.com/espebra/stupid-simple-s3
+# Start after network is available
 After=network.target
 
 [Service]
+# Simple means the process started by ExecStart is the main process
 Type=simple
+# Run as unprivileged user/group
 User=stupid
 Group=stupid
+# Load environment variables from file (- prefix means don't fail if missing)
 EnvironmentFile=-/etc/stupid-simple-s3/environment
 ExecStart=/usr/bin/stupid-simple-s3
+# Restart on non-zero exit code, signal, or timeout
 Restart=on-failure
+# Wait 5 seconds before restarting
 RestartSec=5
 
 # Security hardening
+
+# Prevent the service and its children from gaining new privileges via execve()
 NoNewPrivileges=yes
+# Mount the entire filesystem read-only except for /dev, /proc, /sys, and paths in ReadWritePaths
 ProtectSystem=strict
+# Make /home, /root, and /run/user inaccessible
 ProtectHome=yes
+# Mount a private /tmp and /var/tmp for this service only
 PrivateTmp=yes
+# Allow write access to the data directory (exception to ProtectSystem=strict)
 ReadWritePaths=/var/lib/stupid-simple-s3
 
+# Filesystem restrictions
+
+# Create a private /dev with only pseudo-devices like /dev/null, /dev/zero, /dev/random
+PrivateDevices=yes
+# Make /proc/sys, /sys, /proc/sysrq-trigger, /proc/latency_stats, /proc/acpi, /proc/timer_stats,
+# /proc/fs, and /proc/irq read-only
+ProtectKernelTunables=yes
+# Deny module loading and unloading
+ProtectKernelModules=yes
+# Deny access to kernel log ring buffer (/dev/kmsg, /proc/kmsg)
+ProtectKernelLogs=yes
+# Make /sys/fs/cgroup hierarchy read-only
+ProtectControlGroups=yes
+# Hide processes owned by other users in /proc
+ProtectProc=invisible
+# Only allow access to /proc/self and /proc/pid entries
+ProcSubset=pid
+# Deny creation of SUID/SGID files
+RestrictSUIDSGID=yes
+# Deny changing the system clock
+ProtectClock=yes
+# Deny changing the hostname
+ProtectHostname=yes
+
+# Capability restrictions
+
+# Remove all capabilities from the bounding set (service needs none)
+CapabilityBoundingSet=
+# Don't grant any ambient capabilities
+AmbientCapabilities=
+
+# System call filtering
+
+# Only allow syscalls for the native architecture (prevents 32-bit exploit attempts on 64-bit)
+SystemCallArchitectures=native
+# Allow syscalls typically needed by system services
+SystemCallFilter=@system-service
+# Deny privileged syscalls: @privileged (admin ops), @resources (resource limits),
+# @mount (filesystem mounting), @swap (swap management), @reboot (reboot/kexec),
+# @obsolete (deprecated syscalls)
+SystemCallFilter=~@privileged @resources @mount @swap @reboot @obsolete
+
+# Memory protection
+
+# Deny creating memory mappings that are both writable and executable (W^X)
+MemoryDenyWriteExecute=yes
+# Lock down the personality syscall to prevent changing execution domain
+LockPersonality=yes
+
+# Network restrictions
+
+# Only allow IPv4 (AF_INET), IPv6 (AF_INET6), and Unix sockets (AF_UNIX)
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# Deny binding to any socket by default
+SocketBindDeny=any
+# Allow binding only to TCP port 5553 (adjust if using different port via STUPID_PORT)
+SocketBindAllow=tcp:5553
+
+# Namespace isolation
+
+# Run in a private user namespace with no privileges outside the namespace
+PrivateUsers=yes
+# Deny creating any new namespaces
+RestrictNamespaces=yes
+
+# Misc restrictions
+
+# Deny acquiring realtime scheduling (prevents DoS via scheduler abuse)
+RestrictRealtime=yes
+# Remove System V and POSIX IPC objects owned by user/group when service stops
+RemoveIPC=yes
+# Set file creation mask to 0077 (owner-only access for new files)
+UMask=0077
+
 [Install]
+# Start this service when multi-user.target is reached (normal boot)
 WantedBy=multi-user.target
