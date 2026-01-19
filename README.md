@@ -302,6 +302,26 @@ docker run -d \
   ghcr.io/espebra/stupid-simple-s3:latest
 ```
 
+### Running with Docker Compose
+
+```yaml
+services:
+  stupid-simple-s3:
+    image: ghcr.io/espebra/stupid-simple-s3:latest
+    ports:
+      - "5553:5553"
+    environment:
+      STUPID_BUCKET_NAME: "my-bucket"
+      STUPID_RW_ACCESS_KEY: "AKIAIOSFODNN7EXAMPLE"
+      STUPID_RW_SECRET_KEY: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    volumes:
+      - s3-data:/var/lib/stupid-simple-s3
+    restart: unless-stopped
+
+volumes:
+  s3-data:
+```
+
 ## Testing
 
 Run the test suite:
