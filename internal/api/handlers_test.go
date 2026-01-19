@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
 	"io"
 	"net/http"
@@ -640,6 +641,623 @@ func TestPostObjectRouting(t *testing.T) {
 			t.Errorf("error code = %q, want %q", errResp.Code, s3.ErrInvalidRequest)
 		}
 	})
+}
+
+func TestGetBucket(t *testing.T) {
+	handlers, _, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	t.Run("wrong bucket returns error", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/wrong-bucket", nil)
+		req.SetPathValue("bucket", "wrong-bucket")
+		w := httptest.NewRecorder()
+
+		handlers.GetBucket(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+		}
+	})
+
+	t.Run("list empty bucket", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test-bucket?list-type=2", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		w := httptest.NewRecorder()
+
+		handlers.GetBucket(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+
+		var result s3.ListBucketResultV2
+		if err := xml.NewDecoder(w.Body).Decode(&result); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if result.Name != "test-bucket" {
+			t.Errorf("Name = %q, want %q", result.Name, "test-bucket")
+		}
+		if result.KeyCount != 0 {
+			t.Errorf("KeyCount = %d, want 0", result.KeyCount)
+		}
+	})
+}
+
+func TestListObjectsV2(t *testing.T) {
+	handlers, _, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	// Create some objects
+	objects := []string{"a/1.txt", "a/2.txt", "b/1.txt", "root.txt"}
+	for _, key := range objects {
+		req := httptest.NewRequest("PUT", "/test-bucket/"+key, bytes.NewReader([]byte("content")))
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", key)
+		handlers.PutObject(httptest.NewRecorder(), req)
+	}
+
+	t.Run("list all objects", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test-bucket?list-type=2", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		w := httptest.NewRecorder()
+
+		handlers.ListObjectsV2(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+
+		var result s3.ListBucketResultV2
+		if err := xml.NewDecoder(w.Body).Decode(&result); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if result.KeyCount != 4 {
+			t.Errorf("KeyCount = %d, want 4", result.KeyCount)
+		}
+	})
+
+	t.Run("list with prefix", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test-bucket?list-type=2&prefix=a/", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		w := httptest.NewRecorder()
+
+		handlers.ListObjectsV2(w, req)
+
+		var result s3.ListBucketResultV2
+		_ = xml.NewDecoder(w.Body).Decode(&result)
+
+		if result.KeyCount != 2 {
+			t.Errorf("KeyCount with prefix a/ = %d, want 2", result.KeyCount)
+		}
+	})
+
+	t.Run("list with delimiter", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test-bucket?list-type=2&delimiter=/", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		w := httptest.NewRecorder()
+
+		handlers.ListObjectsV2(w, req)
+
+		var result s3.ListBucketResultV2
+		_ = xml.NewDecoder(w.Body).Decode(&result)
+
+		// Should have 1 root object and 2 common prefixes (a/, b/)
+		if result.KeyCount != 1 {
+			t.Errorf("KeyCount = %d, want 1", result.KeyCount)
+		}
+		if len(result.CommonPrefixes) != 2 {
+			t.Errorf("CommonPrefixes count = %d, want 2", len(result.CommonPrefixes))
+		}
+	})
+
+	t.Run("list with max-keys", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test-bucket?list-type=2&max-keys=2", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		w := httptest.NewRecorder()
+
+		handlers.ListObjectsV2(w, req)
+
+		var result s3.ListBucketResultV2
+		_ = xml.NewDecoder(w.Body).Decode(&result)
+
+		if result.KeyCount != 2 {
+			t.Errorf("KeyCount = %d, want 2", result.KeyCount)
+		}
+		if !result.IsTruncated {
+			t.Error("IsTruncated should be true")
+		}
+	})
+}
+
+func TestDeleteObjects(t *testing.T) {
+	handlers, _, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	// Create objects to delete
+	for _, key := range []string{"delete1.txt", "delete2.txt", "keep.txt"} {
+		req := httptest.NewRequest("PUT", "/test-bucket/"+key, bytes.NewReader([]byte("content")))
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", key)
+		handlers.PutObject(httptest.NewRecorder(), req)
+	}
+
+	t.Run("delete multiple objects", func(t *testing.T) {
+		deleteXML := `<?xml version="1.0" encoding="UTF-8"?>
+		<Delete>
+			<Object><Key>delete1.txt</Key></Object>
+			<Object><Key>delete2.txt</Key></Object>
+		</Delete>`
+
+		req := httptest.NewRequest("POST", "/test-bucket?delete", strings.NewReader(deleteXML))
+		req.SetPathValue("bucket", "test-bucket")
+		w := httptest.NewRecorder()
+
+		handlers.DeleteObjects(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+
+		var result s3.DeleteObjectsResult
+		if err := xml.NewDecoder(w.Body).Decode(&result); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if len(result.Deleted) != 2 {
+			t.Errorf("Deleted count = %d, want 2", len(result.Deleted))
+		}
+	})
+
+	t.Run("delete with quiet mode", func(t *testing.T) {
+		// Re-create an object
+		putReq := httptest.NewRequest("PUT", "/test-bucket/quiet-delete.txt", bytes.NewReader([]byte("content")))
+		putReq.SetPathValue("bucket", "test-bucket")
+		putReq.SetPathValue("key", "quiet-delete.txt")
+		handlers.PutObject(httptest.NewRecorder(), putReq)
+
+		deleteXML := `<?xml version="1.0" encoding="UTF-8"?>
+		<Delete>
+			<Quiet>true</Quiet>
+			<Object><Key>quiet-delete.txt</Key></Object>
+		</Delete>`
+
+		req := httptest.NewRequest("POST", "/test-bucket?delete", strings.NewReader(deleteXML))
+		req.SetPathValue("bucket", "test-bucket")
+		w := httptest.NewRecorder()
+
+		handlers.DeleteObjects(w, req)
+
+		var result s3.DeleteObjectsResult
+		_ = xml.NewDecoder(w.Body).Decode(&result)
+
+		// In quiet mode, successfully deleted objects are not listed
+		if len(result.Deleted) != 0 {
+			t.Errorf("Deleted count in quiet mode = %d, want 0", len(result.Deleted))
+		}
+	})
+
+	t.Run("malformed XML returns error", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/test-bucket?delete", strings.NewReader("not xml"))
+		req.SetPathValue("bucket", "test-bucket")
+		w := httptest.NewRecorder()
+
+		handlers.DeleteObjects(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+		}
+	})
+}
+
+func TestPostBucket(t *testing.T) {
+	handlers, _, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	t.Run("wrong bucket returns error", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/wrong-bucket?delete", nil)
+		req.SetPathValue("bucket", "wrong-bucket")
+		w := httptest.NewRecorder()
+
+		handlers.PostBucket(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+		}
+	})
+
+	t.Run("invalid operation returns error", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/test-bucket", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		w := httptest.NewRecorder()
+
+		handlers.PostBucket(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+		}
+	})
+}
+
+func TestCopyObject(t *testing.T) {
+	handlers, _, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	// Create source object
+	srcKey := "source.txt"
+	content := []byte("copy me")
+	putReq := httptest.NewRequest("PUT", "/test-bucket/"+srcKey, bytes.NewReader(content))
+	putReq.SetPathValue("bucket", "test-bucket")
+	putReq.SetPathValue("key", srcKey)
+	putReq.Header.Set("Content-Type", "text/plain")
+	putReq.Header.Set("X-Amz-Meta-Custom", "value")
+	handlers.PutObject(httptest.NewRecorder(), putReq)
+
+	t.Run("copy object successfully", func(t *testing.T) {
+		req := httptest.NewRequest("PUT", "/test-bucket/destination.txt", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", "destination.txt")
+		req.Header.Set("X-Amz-Copy-Source", "/test-bucket/source.txt")
+		w := httptest.NewRecorder()
+
+		handlers.CopyObject(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+
+		var result s3.CopyObjectResult
+		if err := xml.NewDecoder(w.Body).Decode(&result); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if result.ETag == "" {
+			t.Error("ETag should not be empty")
+		}
+
+		// Verify the copy exists
+		getReq := httptest.NewRequest("GET", "/test-bucket/destination.txt", nil)
+		getReq.SetPathValue("bucket", "test-bucket")
+		getReq.SetPathValue("key", "destination.txt")
+		getW := httptest.NewRecorder()
+		handlers.GetObject(getW, getReq)
+
+		if !bytes.Equal(getW.Body.Bytes(), content) {
+			t.Errorf("copied content = %q, want %q", getW.Body.String(), string(content))
+		}
+	})
+
+	t.Run("copy with URL encoded source", func(t *testing.T) {
+		req := httptest.NewRequest("PUT", "/test-bucket/encoded-dest.txt", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", "encoded-dest.txt")
+		req.Header.Set("X-Amz-Copy-Source", "test-bucket%2Fsource.txt")
+		w := httptest.NewRecorder()
+
+		handlers.CopyObject(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+	})
+
+	t.Run("copy from nonexistent source", func(t *testing.T) {
+		req := httptest.NewRequest("PUT", "/test-bucket/dest.txt", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", "dest.txt")
+		req.Header.Set("X-Amz-Copy-Source", "/test-bucket/nonexistent.txt")
+		w := httptest.NewRecorder()
+
+		handlers.CopyObject(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+		}
+	})
+
+	t.Run("copy from wrong bucket", func(t *testing.T) {
+		req := httptest.NewRequest("PUT", "/test-bucket/dest.txt", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", "dest.txt")
+		req.Header.Set("X-Amz-Copy-Source", "/wrong-bucket/source.txt")
+		w := httptest.NewRecorder()
+
+		handlers.CopyObject(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+		}
+	})
+
+	t.Run("copy with invalid source format", func(t *testing.T) {
+		req := httptest.NewRequest("PUT", "/test-bucket/dest.txt", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", "dest.txt")
+		req.Header.Set("X-Amz-Copy-Source", "invalid")
+		w := httptest.NewRecorder()
+
+		handlers.CopyObject(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+		}
+	})
+}
+
+func TestGetObjectRange(t *testing.T) {
+	handlers, _, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	// Create a test object
+	key := "range-test.txt"
+	content := []byte("0123456789ABCDEF") // 16 bytes
+	putReq := httptest.NewRequest("PUT", "/test-bucket/"+key, bytes.NewReader(content))
+	putReq.SetPathValue("bucket", "test-bucket")
+	putReq.SetPathValue("key", key)
+	handlers.PutObject(httptest.NewRecorder(), putReq)
+
+	t.Run("range bytes=0-4", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test-bucket/"+key, nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", key)
+		req.Header.Set("Range", "bytes=0-4")
+		w := httptest.NewRecorder()
+
+		handlers.GetObject(w, req)
+
+		if w.Code != http.StatusPartialContent {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusPartialContent)
+		}
+
+		if w.Body.String() != "01234" {
+			t.Errorf("body = %q, want %q", w.Body.String(), "01234")
+		}
+
+		contentRange := w.Header().Get("Content-Range")
+		if contentRange != "bytes 0-4/16" {
+			t.Errorf("Content-Range = %q, want %q", contentRange, "bytes 0-4/16")
+		}
+	})
+
+	t.Run("range bytes=10-", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test-bucket/"+key, nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", key)
+		req.Header.Set("Range", "bytes=10-")
+		w := httptest.NewRecorder()
+
+		handlers.GetObject(w, req)
+
+		if w.Code != http.StatusPartialContent {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusPartialContent)
+		}
+
+		if w.Body.String() != "ABCDEF" {
+			t.Errorf("body = %q, want %q", w.Body.String(), "ABCDEF")
+		}
+	})
+
+	t.Run("range bytes=-5 (last 5 bytes)", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test-bucket/"+key, nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", key)
+		req.Header.Set("Range", "bytes=-5")
+		w := httptest.NewRecorder()
+
+		handlers.GetObject(w, req)
+
+		if w.Code != http.StatusPartialContent {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusPartialContent)
+		}
+
+		if w.Body.String() != "BCDEF" {
+			t.Errorf("body = %q, want %q", w.Body.String(), "BCDEF")
+		}
+	})
+
+	t.Run("invalid range format", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test-bucket/"+key, nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", key)
+		req.Header.Set("Range", "invalid")
+		w := httptest.NewRecorder()
+
+		handlers.GetObject(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+		}
+	})
+
+	t.Run("range beyond file size", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test-bucket/"+key, nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", key)
+		req.Header.Set("Range", "bytes=100-200")
+		w := httptest.NewRecorder()
+
+		handlers.GetObject(w, req)
+
+		if w.Code != http.StatusRequestedRangeNotSatisfiable {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusRequestedRangeNotSatisfiable)
+		}
+	})
+}
+
+func TestParseRangeHeader(t *testing.T) {
+	tests := []struct {
+		name      string
+		header    string
+		wantStart int64
+		wantEnd   int64
+		wantErr   bool
+	}{
+		{"simple range", "bytes=0-99", 0, 99, false},
+		{"open ended", "bytes=100-", 100, -1, false},
+		{"suffix range", "bytes=-50", -50, -1, false},
+		{"invalid prefix", "chars=0-99", 0, 0, true},
+		{"invalid format", "bytes=0", 0, 0, true},
+		{"invalid start", "bytes=abc-99", 0, 0, true},
+		{"invalid end", "bytes=0-xyz", 0, 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			start, end, err := parseRangeHeader(tt.header)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseRangeHeader() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if !tt.wantErr {
+				if start != tt.wantStart {
+					t.Errorf("start = %d, want %d", start, tt.wantStart)
+				}
+				if end != tt.wantEnd {
+					t.Errorf("end = %d, want %d", end, tt.wantEnd)
+				}
+			}
+		})
+	}
+}
+
+func TestRequireWritePrivilege(t *testing.T) {
+	dummyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("success"))
+	})
+
+	t.Run("allows write privilege", func(t *testing.T) {
+		handler := RequireWritePrivilege(dummyHandler)
+
+		req := httptest.NewRequest("PUT", "/test", nil)
+		cred := &config.Credential{Privileges: config.PrivilegeReadWrite}
+		ctx := context.WithValue(req.Context(), credentialContextKey, cred)
+		req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+	})
+
+	t.Run("denies read-only privilege", func(t *testing.T) {
+		handler := RequireWritePrivilege(dummyHandler)
+
+		req := httptest.NewRequest("PUT", "/test", nil)
+		cred := &config.Credential{Privileges: config.PrivilegeRead}
+		ctx := context.WithValue(req.Context(), credentialContextKey, cred)
+		req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusForbidden {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusForbidden)
+		}
+	})
+
+	t.Run("denies missing credential", func(t *testing.T) {
+		handler := RequireWritePrivilege(dummyHandler)
+
+		req := httptest.NewRequest("PUT", "/test", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusForbidden {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusForbidden)
+		}
+	})
+}
+
+func TestAccessLogMiddleware(t *testing.T) {
+	dummyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("hello"))
+	})
+
+	t.Run("logs request and passes through", func(t *testing.T) {
+		handler := AccessLogMiddleware(dummyHandler)
+
+		req := httptest.NewRequest("GET", "/test", nil)
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+		if w.Body.String() != "hello" {
+			t.Errorf("body = %q, want %q", w.Body.String(), "hello")
+		}
+	})
+
+	t.Run("extracts client IP from X-Forwarded-For", func(t *testing.T) {
+		handler := AccessLogMiddleware(dummyHandler)
+
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.Header.Set("X-Forwarded-For", "192.168.1.100, 10.0.0.1")
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+	})
+
+	t.Run("extracts client IP from X-Real-IP", func(t *testing.T) {
+		handler := AccessLogMiddleware(dummyHandler)
+
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.Header.Set("X-Real-IP", "192.168.1.100")
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+	})
+}
+
+func TestGetClientIP(t *testing.T) {
+	tests := []struct {
+		name       string
+		xff        string
+		xri        string
+		remoteAddr string
+		want       string
+	}{
+		{"X-Forwarded-For single", "192.168.1.1", "", "10.0.0.1:1234", "192.168.1.1"},
+		{"X-Forwarded-For multiple", "192.168.1.1, 10.0.0.2", "", "10.0.0.1:1234", "192.168.1.1"},
+		{"X-Real-IP", "", "192.168.1.1", "10.0.0.1:1234", "192.168.1.1"},
+		{"RemoteAddr with port", "", "", "10.0.0.1:1234", "10.0.0.1"},
+		{"RemoteAddr without port", "", "", "10.0.0.1", "10.0.0.1"},
+		{"X-Forwarded-For takes precedence", "192.168.1.1", "192.168.2.2", "10.0.0.1:1234", "192.168.1.1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/test", nil)
+			if tt.xff != "" {
+				req.Header.Set("X-Forwarded-For", tt.xff)
+			}
+			if tt.xri != "" {
+				req.Header.Set("X-Real-IP", tt.xri)
+			}
+			req.RemoteAddr = tt.remoteAddr
+
+			got := getClientIP(req)
+			if got != tt.want {
+				t.Errorf("getClientIP() = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }
 
 func TestPresignedResponseHeaderOverrides(t *testing.T) {

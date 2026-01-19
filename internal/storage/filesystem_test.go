@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/espen/stupid-simple-s3/internal/s3"
 )
@@ -883,4 +884,118 @@ func TestGetObjectRangeNotFound(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for nonexistent object")
 	}
+}
+
+func TestCleanupStaleUploads(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	t.Run("no uploads to clean", func(t *testing.T) {
+		cleaned, err := storage.CleanupStaleUploads(time.Hour)
+		if err != nil {
+			t.Fatalf("CleanupStaleUploads failed: %v", err)
+		}
+		if cleaned != 0 {
+			t.Errorf("cleaned = %d, want 0", cleaned)
+		}
+	})
+
+	t.Run("cleans old uploads", func(t *testing.T) {
+		// Create an upload
+		uploadID, err := storage.CreateMultipartUpload("cleanup-test.txt", "text/plain", nil)
+		if err != nil {
+			t.Fatalf("CreateMultipartUpload failed: %v", err)
+		}
+
+		// Upload a part
+		_, err = storage.UploadPart(uploadID, 1, bytes.NewReader([]byte("test content")))
+		if err != nil {
+			t.Fatalf("UploadPart failed: %v", err)
+		}
+
+		// With a very short maxAge (0), it should clean up immediately
+		cleaned, err := storage.CleanupStaleUploads(0)
+		if err != nil {
+			t.Fatalf("CleanupStaleUploads failed: %v", err)
+		}
+		if cleaned != 1 {
+			t.Errorf("cleaned = %d, want 1", cleaned)
+		}
+
+		// Verify upload is gone
+		_, err = storage.GetMultipartUpload(uploadID)
+		if err == nil {
+			t.Error("expected upload to be cleaned up")
+		}
+	})
+
+	t.Run("keeps recent uploads", func(t *testing.T) {
+		// Create an upload
+		uploadID, err := storage.CreateMultipartUpload("keep-test.txt", "text/plain", nil)
+		if err != nil {
+			t.Fatalf("CreateMultipartUpload failed: %v", err)
+		}
+
+		// With a long maxAge, it should not clean up
+		cleaned, err := storage.CleanupStaleUploads(24 * time.Hour)
+		if err != nil {
+			t.Fatalf("CleanupStaleUploads failed: %v", err)
+		}
+		if cleaned != 0 {
+			t.Errorf("cleaned = %d, want 0", cleaned)
+		}
+
+		// Verify upload still exists
+		_, err = storage.GetMultipartUpload(uploadID)
+		if err != nil {
+			t.Error("upload should still exist")
+		}
+
+		// Clean up for next test
+		_ = storage.AbortMultipartUpload(uploadID)
+	})
+
+	t.Run("handles multiple uploads", func(t *testing.T) {
+		// Create multiple uploads
+		for i := 0; i < 3; i++ {
+			uploadID, err := storage.CreateMultipartUpload("multi-cleanup-"+string(rune('a'+i))+".txt", "text/plain", nil)
+			if err != nil {
+				t.Fatalf("CreateMultipartUpload failed: %v", err)
+			}
+			_, _ = storage.UploadPart(uploadID, 1, bytes.NewReader([]byte("content")))
+		}
+
+		// Clean all with maxAge 0
+		cleaned, err := storage.CleanupStaleUploads(0)
+		if err != nil {
+			t.Fatalf("CleanupStaleUploads failed: %v", err)
+		}
+		if cleaned != 3 {
+			t.Errorf("cleaned = %d, want 3", cleaned)
+		}
+	})
+
+	t.Run("handles nonexistent multipart directory", func(t *testing.T) {
+		// Create a fresh storage with a path that doesn't exist
+		tmpDir, _ := os.MkdirTemp("", "sss-cleanup-test-*")
+		defer os.RemoveAll(tmpDir)
+
+		basePath := filepath.Join(tmpDir, "data")
+		multipartPath := filepath.Join(tmpDir, "nonexistent-multipart")
+
+		// Create storage (creates directories)
+		s, _ := NewFilesystemStorage(basePath, multipartPath)
+
+		// Remove the multipart directory
+		os.RemoveAll(multipartPath)
+
+		// Should handle gracefully
+		cleaned, err := s.CleanupStaleUploads(time.Hour)
+		if err != nil {
+			t.Fatalf("CleanupStaleUploads should handle missing directory: %v", err)
+		}
+		if cleaned != 0 {
+			t.Errorf("cleaned = %d, want 0", cleaned)
+		}
+	})
 }

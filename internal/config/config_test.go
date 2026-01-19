@@ -288,3 +288,99 @@ func TestCanWrite(t *testing.T) {
 		})
 	}
 }
+
+func TestCleanupGetInterval(t *testing.T) {
+	tests := []struct {
+		name     string
+		interval string
+		want     string
+	}{
+		{"empty defaults to 1h", "", "1h0m0s"},
+		{"valid duration", "30m", "30m0s"},
+		{"valid duration hours", "2h", "2h0m0s"},
+		{"invalid duration defaults to 1h", "invalid", "1h0m0s"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Cleanup{Interval: tt.interval}
+			got := c.GetInterval().String()
+			if got != tt.want {
+				t.Errorf("GetInterval() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCleanupGetMaxAge(t *testing.T) {
+	tests := []struct {
+		name   string
+		maxAge string
+		want   string
+	}{
+		{"empty defaults to 24h", "", "24h0m0s"},
+		{"valid duration", "12h", "12h0m0s"},
+		{"valid duration minutes", "30m", "30m0s"},
+		{"invalid duration defaults to 24h", "invalid", "24h0m0s"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Cleanup{MaxAge: tt.maxAge}
+			got := c.GetMaxAge().String()
+			if got != tt.want {
+				t.Errorf("GetMaxAge() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMetricsAuthEnabled(t *testing.T) {
+	tests := []struct {
+		name     string
+		username string
+		password string
+		want     bool
+	}{
+		{"both set", "admin", "secret", true},
+		{"only username", "admin", "", false},
+		{"only password", "", "secret", false},
+		{"neither set", "", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &MetricsAuth{Username: tt.username, Password: tt.password}
+			if got := m.Enabled(); got != tt.want {
+				t.Errorf("Enabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfigLog(t *testing.T) {
+	cfg := &Config{
+		Bucket: Bucket{Name: "test-bucket"},
+		Storage: Storage{
+			Path:          "/var/lib/data",
+			MultipartPath: "/var/lib/tmp",
+		},
+		Server: Server{Address: ":5553"},
+		Cleanup: Cleanup{
+			Enabled:  true,
+			Interval: "1h",
+			MaxAge:   "24h",
+		},
+		MetricsAuth: MetricsAuth{
+			Username: "admin",
+			Password: "secret",
+		},
+		Credentials: []Credential{
+			{AccessKeyID: "AKIA1", SecretAccessKey: "secret1", Privileges: PrivilegeReadWrite},
+			{AccessKeyID: "AKIA2", SecretAccessKey: "secret2", Privileges: PrivilegeRead},
+		},
+	}
+
+	// Log() should not panic - just verify it runs
+	cfg.Log()
+}
