@@ -11,6 +11,7 @@ import (
 
 	"github.com/espen/stupid-simple-s3/internal/auth"
 	"github.com/espen/stupid-simple-s3/internal/config"
+	"github.com/espen/stupid-simple-s3/internal/metrics"
 	"github.com/espen/stupid-simple-s3/internal/s3"
 	"github.com/espen/stupid-simple-s3/internal/storage"
 )
@@ -62,6 +63,10 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 		h.CopyObject(w, r)
 		return
 	}
+
+	// Track active upload
+	metrics.UploadsActive.Inc()
+	defer metrics.UploadsActive.Dec()
 
 	// Regular put object
 	contentType := r.Header.Get("Content-Type")
@@ -156,6 +161,10 @@ func (h *Handlers) GetObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Track active download
+	metrics.DownloadsActive.Inc()
+	defer metrics.DownloadsActive.Dec()
+
 	reader, meta, err := h.storage.GetObject(key)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -188,6 +197,10 @@ func (h *Handlers) GetObject(w http.ResponseWriter, r *http.Request) {
 
 // GetObjectRange handles GET with Range header
 func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
+	// Track active download
+	metrics.DownloadsActive.Inc()
+	defer metrics.DownloadsActive.Dec()
+
 	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
 
@@ -463,6 +476,10 @@ func (h *Handlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 		s3.NewError(s3.ErrInvalidArgument, "/"+bucket+"/"+key).WriteResponse(w)
 		return
 	}
+
+	// Track active upload
+	metrics.UploadsActive.Inc()
+	defer metrics.UploadsActive.Dec()
 
 	// Handle AWS chunked encoding
 	body := wrapBodyIfChunked(r.Body, r.Header.Get("Content-Encoding"), r.Header.Get("X-Amz-Content-Sha256"))
