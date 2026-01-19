@@ -886,6 +886,152 @@ func TestGetObjectRangeNotFound(t *testing.T) {
 	}
 }
 
+func TestValidateKey(t *testing.T) {
+	tests := []struct {
+		name    string
+		key     string
+		wantErr bool
+	}{
+		// Valid keys
+		{"simple key", "file.txt", false},
+		{"nested path", "path/to/file.txt", false},
+		{"with spaces", "path/with spaces/file.txt", false},
+		{"unicode", "文件/test.txt", false},
+		{"dots in filename", "file.name.txt", false},
+		{"single dot path", "./file.txt", false},
+		{"hidden file", ".hidden", false},
+
+		// Invalid keys - empty
+		{"empty key", "", true},
+
+		// Invalid keys - path traversal
+		{"double dot only", "..", true},
+		{"double dot at start", "../file.txt", true},
+		{"double dot in middle", "path/../file.txt", true},
+		{"double dot at end", "path/to/..", true},
+		{"multiple traversals", "../../etc/passwd", true},
+		{"deep traversal", "a/b/c/../../../etc/passwd", true},
+
+		// Invalid keys - absolute paths
+		{"absolute path unix", "/etc/passwd", true},
+		{"absolute path with traversal", "/../../etc/passwd", true},
+
+		// Invalid keys - null bytes
+		{"null byte", "file\x00.txt", true},
+		{"null byte in path", "path/\x00/file.txt", true},
+
+		// Edge cases - backslash (Windows-style)
+		{"backslash traversal", "..\\file.txt", true},
+		{"backslash in middle", "path\\..\\file.txt", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateKey(tt.key)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateKey(%q) error = %v, wantErr %v", tt.key, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestPathTraversalPrevention(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	traversalKeys := []string{
+		"../../../etc/passwd",
+		"..\\..\\..\\windows\\system32\\config\\sam",
+		"/etc/passwd",
+		"path/../../../etc/passwd",
+		"..",
+		"../",
+		"a/b/../../..",
+	}
+
+	for _, key := range traversalKeys {
+		t.Run("PutObject_"+key, func(t *testing.T) {
+			_, err := storage.PutObject(key, "text/plain", nil, bytes.NewReader([]byte("test")))
+			if err == nil {
+				t.Fatalf("PutObject(%q) should have failed with path traversal error", key)
+			}
+			if !strings.Contains(err.Error(), "invalid object key") {
+				t.Errorf("PutObject(%q) error = %v, want error containing 'invalid object key'", key, err)
+			}
+		})
+
+		t.Run("GetObject_"+key, func(t *testing.T) {
+			_, _, err := storage.GetObject(key)
+			if err == nil {
+				t.Fatalf("GetObject(%q) should have failed with path traversal error", key)
+			}
+			if !strings.Contains(err.Error(), "invalid object key") {
+				t.Errorf("GetObject(%q) error = %v, want error containing 'invalid object key'", key, err)
+			}
+		})
+
+		t.Run("HeadObject_"+key, func(t *testing.T) {
+			_, err := storage.HeadObject(key)
+			if err == nil {
+				t.Fatalf("HeadObject(%q) should have failed with path traversal error", key)
+			}
+			if !strings.Contains(err.Error(), "invalid object key") {
+				t.Errorf("HeadObject(%q) error = %v, want error containing 'invalid object key'", key, err)
+			}
+		})
+
+		t.Run("DeleteObject_"+key, func(t *testing.T) {
+			err := storage.DeleteObject(key)
+			if err == nil {
+				t.Fatalf("DeleteObject(%q) should have failed with path traversal error", key)
+			}
+			if !strings.Contains(err.Error(), "invalid object key") {
+				t.Errorf("DeleteObject(%q) error = %v, want error containing 'invalid object key'", key, err)
+			}
+		})
+
+		t.Run("ObjectExists_"+key, func(t *testing.T) {
+			_, err := storage.ObjectExists(key)
+			if err == nil {
+				t.Fatalf("ObjectExists(%q) should have failed with path traversal error", key)
+			}
+			if !strings.Contains(err.Error(), "invalid object key") {
+				t.Errorf("ObjectExists(%q) error = %v, want error containing 'invalid object key'", key, err)
+			}
+		})
+
+		t.Run("GetObjectRange_"+key, func(t *testing.T) {
+			_, _, err := storage.GetObjectRange(key, 0, 10)
+			if err == nil {
+				t.Fatalf("GetObjectRange(%q) should have failed with path traversal error", key)
+			}
+			if !strings.Contains(err.Error(), "invalid object key") {
+				t.Errorf("GetObjectRange(%q) error = %v, want error containing 'invalid object key'", key, err)
+			}
+		})
+
+		t.Run("CopyObject_src_"+key, func(t *testing.T) {
+			_, err := storage.CopyObject(key, "valid-dest.txt")
+			if err == nil {
+				t.Fatalf("CopyObject(%q, dst) should have failed with path traversal error", key)
+			}
+			if !strings.Contains(err.Error(), "invalid object key") {
+				t.Errorf("CopyObject(%q, dst) error = %v, want error containing 'invalid object key'", key, err)
+			}
+		})
+
+		t.Run("CreateMultipartUpload_"+key, func(t *testing.T) {
+			_, err := storage.CreateMultipartUpload(key, "text/plain", nil)
+			if err == nil {
+				t.Fatalf("CreateMultipartUpload(%q) should have failed with path traversal error", key)
+			}
+			if !strings.Contains(err.Error(), "invalid object key") {
+				t.Errorf("CreateMultipartUpload(%q) error = %v, want error containing 'invalid object key'", key, err)
+			}
+		})
+	}
+}
+
 func TestCleanupStaleUploads(t *testing.T) {
 	storage, cleanup := setupTestStorage(t)
 	defer cleanup()
