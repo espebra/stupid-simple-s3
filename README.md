@@ -49,17 +49,6 @@ The cleanup job runs periodically to remove stale multipart uploads. When a mult
 
 Set `STUPID_CLEANUP_ENABLED=false` to disable the cleanup job entirely.
 
-Example:
-
-```bash
-export STUPID_BUCKET_NAME="my-bucket"
-export STUPID_STORAGE_PATH="/var/lib/stupid-simple-s3/data"
-export STUPID_MULTIPART_PATH="/var/lib/stupid-simple-s3/tmp"
-export STUPID_RW_ACCESS_KEY="AKIAIOSFODNN7EXAMPLE"
-export STUPID_RW_SECRET_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-./bin/stupid-simple-s3
-```
-
 ## Building
 
 ```bash

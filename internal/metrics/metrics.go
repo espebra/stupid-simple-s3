@@ -60,27 +60,27 @@ var (
 		[]string{"operation", "error_code"},
 	)
 
-	// ObjectsStored tracks number of objects currently stored (gauge)
-	ObjectsStored = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "stupid_simple_s3_objects_stored",
-			Help: "Number of objects currently stored",
-		},
-	)
-
-	// StorageBytesUsed tracks total bytes used by stored objects (gauge)
-	StorageBytesUsed = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "stupid_simple_s3_storage_bytes_used",
-			Help: "Total bytes used by stored objects",
-		},
-	)
-
 	// MultipartUploadsActive tracks number of active multipart uploads
 	MultipartUploadsActive = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "stupid_simple_s3_multipart_uploads_active",
 			Help: "Number of active multipart uploads",
+		},
+	)
+
+	// UploadsActive tracks number of currently active upload operations
+	UploadsActive = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "stupid_simple_s3_uploads_active",
+			Help: "Number of currently active upload operations",
+		},
+	)
+
+	// DownloadsActive tracks number of currently active download operations
+	DownloadsActive = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "stupid_simple_s3_downloads_active",
+			Help: "Number of currently active download operations",
 		},
 	)
 
