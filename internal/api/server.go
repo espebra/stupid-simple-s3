@@ -61,11 +61,11 @@ func (s *Server) Handler() http.Handler {
 			return
 		case "/healthz":
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("ok"))
+			_, _ = w.Write([]byte("ok"))
 			return
 		case "/readyz":
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("ok"))
+			_, _ = w.Write([]byte("ok"))
 			return
 		}
 		s.mux.ServeHTTP(w, r)
