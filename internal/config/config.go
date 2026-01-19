@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -28,6 +30,19 @@ type Storage struct {
 	Path          string
 	MultipartPath string
 }
+
+// Limits contains resource limits for the service
+type Limits struct {
+	MaxObjectSize int64 // Maximum size of a single object in bytes (0 = unlimited)
+	MaxPartSize   int64 // Maximum size of a single multipart part in bytes (0 = unlimited)
+}
+
+
+// DefaultMaxObjectSize is 5GB (S3's maximum for single PUT)
+const DefaultMaxObjectSize = 5 * 1024 * 1024 * 1024
+
+// DefaultMaxPartSize is 5GB (S3's maximum part size)
+const DefaultMaxPartSize = 5 * 1024 * 1024 * 1024
 
 type Cleanup struct {
 	Enabled  bool
@@ -60,8 +75,17 @@ func (c *Cleanup) GetMaxAge() time.Duration {
 }
 
 type Server struct {
-	Address string
+	Address        string
+	TrustedProxies []string      // List of trusted proxy IPs/CIDRs that can set X-Forwarded-For
+	ReadTimeout    time.Duration // Maximum duration for reading entire request
+	WriteTimeout   time.Duration // Maximum duration for writing response
 }
+
+// DefaultReadTimeout is 30 minutes to allow large uploads
+const DefaultReadTimeout = 30 * time.Minute
+
+// DefaultWriteTimeout is 30 minutes to allow large downloads
+const DefaultWriteTimeout = 30 * time.Minute
 
 type MetricsAuth struct {
 	Username string
@@ -80,6 +104,7 @@ type Config struct {
 	Credentials []Credential
 	Cleanup     Cleanup
 	MetricsAuth MetricsAuth
+	Limits      Limits
 }
 
 // Load creates a configuration from environment variables.
@@ -98,6 +123,11 @@ type Config struct {
 //   - STUPID_RW_SECRET_KEY: Read-write user secret key
 //   - STUPID_METRICS_USERNAME: Username for /metrics basic auth (optional)
 //   - STUPID_METRICS_PASSWORD: Password for /metrics basic auth (optional)
+//   - STUPID_MAX_OBJECT_SIZE: Maximum object size in bytes (default: 5GB)
+//   - STUPID_MAX_PART_SIZE: Maximum multipart part size in bytes (default: 5GB)
+//   - STUPID_TRUSTED_PROXIES: Comma-separated list of trusted proxy IPs/CIDRs (optional)
+//   - STUPID_READ_TIMEOUT: Maximum duration for reading requests (default: "30m")
+//   - STUPID_WRITE_TIMEOUT: Maximum duration for writing responses (default: "30m")
 func Load() (*Config, error) {
 	host := os.Getenv("STUPID_HOST")
 	port := os.Getenv("STUPID_PORT")
@@ -117,6 +147,17 @@ func Load() (*Config, error) {
 		multipartPath = "/var/lib/stupid-simple-s3/tmp"
 	}
 
+	// Parse trusted proxies
+	var trustedProxies []string
+	if proxyList := os.Getenv("STUPID_TRUSTED_PROXIES"); proxyList != "" {
+		for _, proxy := range strings.Split(proxyList, ",") {
+			proxy = strings.TrimSpace(proxy)
+			if proxy != "" {
+				trustedProxies = append(trustedProxies, proxy)
+			}
+		}
+	}
+
 	cfg := &Config{
 		Bucket: Bucket{
 			Name: os.Getenv("STUPID_BUCKET_NAME"),
@@ -126,7 +167,10 @@ func Load() (*Config, error) {
 			MultipartPath: multipartPath,
 		},
 		Server: Server{
-			Address: address,
+			Address:        address,
+			TrustedProxies: trustedProxies,
+			ReadTimeout:    parseEnvDuration("STUPID_READ_TIMEOUT", DefaultReadTimeout),
+			WriteTimeout:   parseEnvDuration("STUPID_WRITE_TIMEOUT", DefaultWriteTimeout),
 		},
 		Cleanup: Cleanup{
 			Enabled:  os.Getenv("STUPID_CLEANUP_ENABLED") != "false",
@@ -136,6 +180,10 @@ func Load() (*Config, error) {
 		MetricsAuth: MetricsAuth{
 			Username: os.Getenv("STUPID_METRICS_USERNAME"),
 			Password: os.Getenv("STUPID_METRICS_PASSWORD"),
+		},
+		Limits: Limits{
+			MaxObjectSize: parseEnvInt64("STUPID_MAX_OBJECT_SIZE", DefaultMaxObjectSize),
+			MaxPartSize:   parseEnvInt64("STUPID_MAX_PART_SIZE", DefaultMaxPartSize),
 		},
 	}
 
@@ -171,6 +219,24 @@ func Load() (*Config, error) {
 func getEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
+	}
+	return defaultValue
+}
+
+func parseEnvInt64(key string, defaultValue int64) int64 {
+	if value := os.Getenv(key); value != "" {
+		if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
+			return parsed
+		}
+	}
+	return defaultValue
+}
+
+func parseEnvDuration(key string, defaultValue time.Duration) time.Duration {
+	if value := os.Getenv(key); value != "" {
+		if parsed, err := time.ParseDuration(value); err == nil {
+			return parsed
+		}
 	}
 	return defaultValue
 }
@@ -231,6 +297,11 @@ func (c *Config) Log() {
 	log.Printf("  Cleanup interval: %s", c.Cleanup.GetInterval())
 	log.Printf("  Cleanup max age: %s", c.Cleanup.GetMaxAge())
 	log.Printf("  Metrics auth enabled: %t", c.MetricsAuth.Enabled())
+	log.Printf("  Max object size: %d bytes", c.Limits.MaxObjectSize)
+	log.Printf("  Max part size: %d bytes", c.Limits.MaxPartSize)
+	log.Printf("  Trusted proxies: %d configured", len(c.Server.TrustedProxies))
+	log.Printf("  Read timeout: %s", c.Server.ReadTimeout)
+	log.Printf("  Write timeout: %s", c.Server.WriteTimeout)
 	log.Printf("  Credentials: %d configured", len(c.Credentials))
 	for i, cred := range c.Credentials {
 		log.Printf("    [%d] Access key: %s, Privileges: %s", i, cred.AccessKeyID, cred.Privileges)

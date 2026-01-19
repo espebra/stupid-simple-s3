@@ -3,11 +3,25 @@ package api
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/espen/stupid-simple-s3/internal/config"
 	"github.com/espen/stupid-simple-s3/internal/storage"
+)
+
+// Server timeout constants
+const (
+	// ReadHeaderTimeout is the amount of time allowed to read request headers.
+	// This helps mitigate Slowloris attacks.
+	ReadHeaderTimeout = 10 * time.Second
+
+	// IdleTimeout is the maximum amount of time to wait for the next request.
+	IdleTimeout = 120 * time.Second
+
+	// MaxHeaderBytes is the maximum size of request headers.
+	MaxHeaderBytes = 1 << 20 // 1 MB
 )
 
 // Server is the S3 HTTP server
@@ -73,8 +87,19 @@ func (s *Server) Handler() http.Handler {
 	return AccessLogMiddleware(handler)
 }
 
-// ListenAndServe starts the server
+// ListenAndServe starts the server with security-hardened timeouts
 func (s *Server) ListenAndServe() error {
 	log.Printf("Starting S3 server on %s", s.cfg.Server.Address)
-	return http.ListenAndServe(s.cfg.Server.Address, s.Handler())
+
+	server := &http.Server{
+		Addr:              s.cfg.Server.Address,
+		Handler:           s.Handler(),
+		ReadHeaderTimeout: ReadHeaderTimeout,
+		ReadTimeout:       s.cfg.Server.ReadTimeout,
+		WriteTimeout:      s.cfg.Server.WriteTimeout,
+		IdleTimeout:       IdleTimeout,
+		MaxHeaderBytes:    MaxHeaderBytes,
+	}
+
+	return server.ListenAndServe()
 }

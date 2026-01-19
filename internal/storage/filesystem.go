@@ -5,14 +5,62 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/espen/stupid-simple-s3/internal/s3"
 )
+
+// ErrInvalidKey is returned when an object key fails validation
+var ErrInvalidKey = errors.New("invalid object key")
+
+// ValidateKey checks that an object key is safe and doesn't contain path traversal sequences.
+// Returns an error if the key is invalid.
+func ValidateKey(key string) error {
+	// Reject empty keys
+	if key == "" {
+		return fmt.Errorf("%w: key cannot be empty", ErrInvalidKey)
+	}
+
+	// Reject keys containing null bytes
+	if strings.ContainsRune(key, '\x00') {
+		return fmt.Errorf("%w: key cannot contain null bytes", ErrInvalidKey)
+	}
+
+	// Reject absolute paths
+	if strings.HasPrefix(key, "/") {
+		return fmt.Errorf("%w: key cannot be an absolute path", ErrInvalidKey)
+	}
+
+	// Normalize backslashes to forward slashes for checking
+	// (on Unix, backslash is a valid filename char, but we reject it for safety)
+	normalizedKey := strings.ReplaceAll(key, "\\", "/")
+
+	// Check for ".." as a path component in the original key
+	// This catches traversal attempts before filepath.Clean normalizes them away
+	parts := strings.Split(normalizedKey, "/")
+	for _, part := range parts {
+		if part == ".." {
+			return fmt.Errorf("%w: key cannot contain path traversal sequences", ErrInvalidKey)
+		}
+	}
+
+	// Also verify the cleaned path doesn't escape (defense in depth)
+	cleaned := filepath.Clean(key)
+	if filepath.IsAbs(cleaned) {
+		return fmt.Errorf("%w: key cannot be an absolute path", ErrInvalidKey)
+	}
+	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%w: key cannot traverse above root", ErrInvalidKey)
+	}
+
+	return nil
+}
 
 // FilesystemStorage implements Storage using the local filesystem
 type FilesystemStorage struct {
@@ -25,7 +73,7 @@ func NewFilesystemStorage(basePath, multipartPath string) (*FilesystemStorage, e
 	// Create base directories if they don't exist
 	objectsPath := filepath.Join(basePath, "objects")
 	if _, err := os.Stat(objectsPath); os.IsNotExist(err) {
-		if err := os.MkdirAll(objectsPath, 0755); err != nil {
+		if err := os.MkdirAll(objectsPath, 0700); err != nil {
 			return nil, fmt.Errorf("creating objects directory: %w", err)
 		}
 	} else if err != nil {
@@ -33,7 +81,7 @@ func NewFilesystemStorage(basePath, multipartPath string) (*FilesystemStorage, e
 	}
 
 	if _, err := os.Stat(multipartPath); os.IsNotExist(err) {
-		if err := os.MkdirAll(multipartPath, 0755); err != nil {
+		if err := os.MkdirAll(multipartPath, 0700); err != nil {
 			return nil, fmt.Errorf("creating multipart directory: %w", err)
 		}
 	} else if err != nil {
@@ -48,7 +96,13 @@ func NewFilesystemStorage(basePath, multipartPath string) (*FilesystemStorage, e
 
 // keyToPath converts an object key to a filesystem path
 // Uses a 4-character hash prefix for directory distribution (65,536 buckets) and base64-encoded key
-func (fs *FilesystemStorage) keyToPath(key string) string {
+// Returns an error if the key is invalid or the resulting path would escape the base directory.
+func (fs *FilesystemStorage) keyToPath(key string) (string, error) {
+	// Validate the key first
+	if err := ValidateKey(key); err != nil {
+		return "", err
+	}
+
 	// Create a hash prefix from the first 4 chars of MD5 of the key
 	hash := md5.Sum([]byte(key))
 	prefix := hex.EncodeToString(hash[:2])
@@ -56,17 +110,51 @@ func (fs *FilesystemStorage) keyToPath(key string) string {
 	// Base64 encode the key for safe filesystem storage
 	encodedKey := base64.URLEncoding.EncodeToString([]byte(key))
 
-	return filepath.Join(fs.basePath, "objects", prefix, encodedKey)
+	result := filepath.Join(fs.basePath, "objects", prefix, encodedKey)
+
+	// Defense in depth: verify the resulting path is within basePath
+	// First, resolve the base path (which should always exist)
+	absBase, err := filepath.Abs(fs.basePath)
+	if err != nil {
+		return "", fmt.Errorf("%w: failed to resolve base path", ErrInvalidKey)
+	}
+	// Resolve symlinks on base path to handle cases like /tmp -> /private/tmp on macOS
+	if realBase, err := filepath.EvalSymlinks(absBase); err == nil {
+		absBase = realBase
+	}
+
+	// For the result path, we need to resolve what exists and verify the rest
+	// Since the full path may not exist yet, resolve from the base and append the relative part
+	relPath := filepath.Join("objects", prefix, encodedKey)
+	absResult := filepath.Join(absBase, relPath)
+
+	// If the result path exists (e.g., on read operations), verify via symlink resolution
+	if realResult, err := filepath.EvalSymlinks(absResult); err == nil {
+		// Path exists - verify the resolved path is still within base
+		if !strings.HasPrefix(realResult, absBase+string(filepath.Separator)) {
+			return "", fmt.Errorf("%w: path escapes base directory via symlink", ErrInvalidKey)
+		}
+	}
+
+	// Ensure the result path is within the base path
+	if !strings.HasPrefix(absResult, absBase+string(filepath.Separator)) {
+		return "", fmt.Errorf("%w: path escapes base directory", ErrInvalidKey)
+	}
+
+	return result, nil
 }
 
 // PutObject stores an object with the given key
 func (fs *FilesystemStorage) PutObject(key string, contentType string, metadata map[string]string, body io.Reader) (*s3.ObjectMetadata, error) {
-	objPath := fs.keyToPath(key)
+	objPath, err := fs.keyToPath(key)
+	if err != nil {
+		return nil, err
+	}
 	dataPath := filepath.Join(objPath, "data")
 	metaPath := filepath.Join(objPath, "meta.json")
 
 	// Create object directory
-	if err := os.MkdirAll(objPath, 0755); err != nil {
+	if err := os.MkdirAll(objPath, 0700); err != nil {
 		return nil, fmt.Errorf("creating object directory: %w", err)
 	}
 
@@ -128,7 +216,10 @@ func (fs *FilesystemStorage) PutObject(key string, contentType string, metadata 
 
 // GetObject retrieves an object by key
 func (fs *FilesystemStorage) GetObject(key string) (io.ReadCloser, *s3.ObjectMetadata, error) {
-	objPath := fs.keyToPath(key)
+	objPath, err := fs.keyToPath(key)
+	if err != nil {
+		return nil, nil, err
+	}
 	dataPath := filepath.Join(objPath, "data")
 
 	// Get metadata first
@@ -151,7 +242,10 @@ func (fs *FilesystemStorage) GetObject(key string) (io.ReadCloser, *s3.ObjectMet
 
 // HeadObject retrieves object metadata without the body
 func (fs *FilesystemStorage) HeadObject(key string) (*s3.ObjectMetadata, error) {
-	objPath := fs.keyToPath(key)
+	objPath, err := fs.keyToPath(key)
+	if err != nil {
+		return nil, err
+	}
 	metaPath := filepath.Join(objPath, "meta.json")
 
 	metaFile, err := os.Open(metaPath)
@@ -173,10 +267,13 @@ func (fs *FilesystemStorage) HeadObject(key string) (*s3.ObjectMetadata, error) 
 
 // DeleteObject removes an object by key
 func (fs *FilesystemStorage) DeleteObject(key string) error {
-	objPath := fs.keyToPath(key)
+	objPath, err := fs.keyToPath(key)
+	if err != nil {
+		return err
+	}
 
 	// Remove the entire object directory
-	err := os.RemoveAll(objPath)
+	err = os.RemoveAll(objPath)
 	if err != nil {
 		return fmt.Errorf("removing object: %w", err)
 	}
@@ -190,10 +287,13 @@ func (fs *FilesystemStorage) DeleteObject(key string) error {
 
 // ObjectExists checks if an object exists
 func (fs *FilesystemStorage) ObjectExists(key string) (bool, error) {
-	objPath := fs.keyToPath(key)
+	objPath, err := fs.keyToPath(key)
+	if err != nil {
+		return false, err
+	}
 	metaPath := filepath.Join(objPath, "meta.json")
 
-	_, err := os.Stat(metaPath)
+	_, err = os.Stat(metaPath)
 	if err == nil {
 		return true, nil
 	}
@@ -205,7 +305,10 @@ func (fs *FilesystemStorage) ObjectExists(key string) (bool, error) {
 
 // GetObjectRange retrieves a range of bytes from an object
 func (fs *FilesystemStorage) GetObjectRange(key string, start, end int64) (io.ReadCloser, *s3.ObjectMetadata, error) {
-	objPath := fs.keyToPath(key)
+	objPath, err := fs.keyToPath(key)
+	if err != nil {
+		return nil, nil, err
+	}
 	dataPath := filepath.Join(objPath, "data")
 
 	// Get metadata first

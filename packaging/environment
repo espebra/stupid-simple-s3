@@ -2,31 +2,49 @@
 # This file is sourced by systemd when starting the service.
 # Uncomment and modify the values as needed.
 
+# =============================================================================
 # Server configuration
+# =============================================================================
+
 # Listen host (default: all interfaces)
 #STUPID_HOST=
 
 # Listen port (default: 5553)
 #STUPID_PORT=5553
 
+# =============================================================================
 # Bucket configuration (required)
+# =============================================================================
+
 STUPID_BUCKET_NAME=my-bucket
 
-# Storage paths (defaults shown)
+# =============================================================================
+# Storage paths
+# =============================================================================
+
+# Path for storing objects (default: /var/lib/stupid-simple-s3/data)
 #STUPID_STORAGE_PATH=/var/lib/stupid-simple-s3/data
+
+# Path for storing multipart upload parts (default: /var/lib/stupid-simple-s3/tmp)
 #STUPID_MULTIPART_PATH=/var/lib/stupid-simple-s3/tmp
 
+# =============================================================================
 # Cleanup job configuration
-# Enable cleanup job (default: true)
+# =============================================================================
+
+# Enable cleanup job for stale multipart uploads (default: true)
 #STUPID_CLEANUP_ENABLED=true
 
-# Cleanup interval (default: 1h)
+# How often to run the cleanup job (default: 1h)
 #STUPID_CLEANUP_INTERVAL=1h
 
-# Max age for stale multipart uploads (default: 24h)
+# Max age for stale multipart uploads before deletion (default: 24h)
 #STUPID_CLEANUP_MAX_AGE=24h
 
+# =============================================================================
 # Credentials - At least one credential pair is required
+# =============================================================================
+
 # Read-only credentials (optional)
 #STUPID_RO_ACCESS_KEY=
 #STUPID_RO_SECRET_KEY=
@@ -35,7 +53,41 @@ STUPID_BUCKET_NAME=my-bucket
 STUPID_RW_ACCESS_KEY=your-access-key-here
 STUPID_RW_SECRET_KEY=your-secret-key-here
 
+# =============================================================================
 # Metrics endpoint authentication (optional)
+# =============================================================================
+
 # If both are set, /metrics endpoint requires basic auth
 #STUPID_METRICS_USERNAME=
 #STUPID_METRICS_PASSWORD=
+
+# =============================================================================
+# Upload size limits
+# =============================================================================
+
+# Maximum size for a single object upload in bytes (default: 5GB)
+#STUPID_MAX_OBJECT_SIZE=5368709120
+
+# Maximum size for a single multipart part in bytes (default: 5GB)
+#STUPID_MAX_PART_SIZE=5368709120
+
+# =============================================================================
+# HTTP server timeouts
+# =============================================================================
+
+# Maximum duration for reading the entire request, including body (default: 30m)
+# Increase for very large uploads over slow connections
+#STUPID_READ_TIMEOUT=30m
+
+# Maximum duration for writing the response (default: 30m)
+# Increase for very large downloads over slow connections
+#STUPID_WRITE_TIMEOUT=30m
+
+# =============================================================================
+# Security: Trusted proxies
+# =============================================================================
+
+# Comma-separated list of trusted proxy IPs or CIDR ranges
+# When set, X-Forwarded-For and X-Real-IP headers from these sources are trusted
+# Example: 127.0.0.1,10.0.0.0/8,192.168.1.0/24
+#STUPID_TRUSTED_PROXIES=

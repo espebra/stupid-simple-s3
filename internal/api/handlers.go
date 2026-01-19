@@ -2,8 +2,10 @@ package api
 
 import (
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -15,6 +17,78 @@ import (
 	"github.com/espen/stupid-simple-s3/internal/s3"
 	"github.com/espen/stupid-simple-s3/internal/storage"
 )
+
+// Maximum allowed value for max-keys parameter
+const maxKeysLimit = 1000
+
+// ErrInvalidMetadata is returned when metadata contains invalid characters
+var ErrInvalidMetadata = errors.New("invalid metadata")
+
+// validateMetadataValue checks that a metadata value doesn't contain characters
+// that could be used for header injection attacks (CRLF injection).
+func validateMetadataValue(value string) error {
+	if strings.ContainsAny(value, "\r\n\x00") {
+		return ErrInvalidMetadata
+	}
+	return nil
+}
+
+// validateMetadataKey checks that a metadata key is valid.
+func validateMetadataKey(key string) error {
+	if strings.ContainsAny(key, "\r\n\x00") {
+		return ErrInvalidMetadata
+	}
+	return nil
+}
+
+// extractAndValidateMetadata extracts x-amz-meta-* headers and validates them.
+// Returns the metadata map and an error if validation fails.
+func extractAndValidateMetadata(headers http.Header) (map[string]string, error) {
+	userMetadata := make(map[string]string)
+	for name, values := range headers {
+		lowerName := strings.ToLower(name)
+		if strings.HasPrefix(lowerName, "x-amz-meta-") && len(values) > 0 {
+			metaKey := strings.TrimPrefix(lowerName, "x-amz-meta-")
+			if err := validateMetadataKey(metaKey); err != nil {
+				return nil, err
+			}
+			if err := validateMetadataValue(values[0]); err != nil {
+				return nil, err
+			}
+			userMetadata[metaKey] = values[0]
+		}
+	}
+	return userMetadata, nil
+}
+
+// limitedReader wraps an io.Reader to enforce a maximum read size.
+// Returns an error when the limit is exceeded.
+type limitedReader struct {
+	r         io.Reader
+	remaining int64
+}
+
+func newLimitedReader(r io.Reader, limit int64) *limitedReader {
+	return &limitedReader{r: r, remaining: limit}
+}
+
+func (l *limitedReader) Read(p []byte) (n int, err error) {
+	if l.remaining <= 0 {
+		// Try to read one more byte to see if there's more data
+		var buf [1]byte
+		n, err := l.r.Read(buf[:])
+		if n > 0 {
+			return 0, errors.New("entity too large")
+		}
+		return 0, err
+	}
+	if int64(len(p)) > l.remaining {
+		p = p[:l.remaining]
+	}
+	n, err = l.r.Read(p)
+	l.remaining -= int64(n)
+	return n, err
+}
 
 // Handlers contains all S3 API handlers
 type Handlers struct {
@@ -34,7 +108,7 @@ func NewHandlers(cfg *config.Config, store storage.MultipartStorage) *Handlers {
 func (h *Handlers) HeadBucket(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 	if bucket != h.cfg.Bucket.Name {
-		s3.NewError(s3.ErrNoSuchBucket, "/"+bucket).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -46,7 +120,7 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 
 	if bucket != h.cfg.Bucket.Name {
-		s3.NewError(s3.ErrNoSuchBucket, "/"+bucket).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
 
@@ -74,22 +148,32 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 		contentType = "application/octet-stream"
 	}
 
-	// Extract user metadata (x-amz-meta-* headers)
-	userMetadata := make(map[string]string)
-	for name, values := range r.Header {
-		lowerName := strings.ToLower(name)
-		if strings.HasPrefix(lowerName, "x-amz-meta-") && len(values) > 0 {
-			metaKey := strings.TrimPrefix(lowerName, "x-amz-meta-")
-			userMetadata[metaKey] = values[0]
-		}
+	// Extract and validate user metadata (x-amz-meta-* headers)
+	userMetadata, err := extractAndValidateMetadata(r.Header)
+	if err != nil {
+		s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
+		return
 	}
 
 	// Handle AWS chunked encoding (used by Minio SDK and some AWS SDK configurations)
-	body := wrapBodyIfChunked(r.Body, r.Header.Get("Content-Encoding"), r.Header.Get("X-Amz-Content-Sha256"))
+	var body io.Reader = wrapBodyIfChunked(r.Body, r.Header.Get("Content-Encoding"), r.Header.Get("X-Amz-Content-Sha256"))
+
+	// Enforce maximum object size limit
+	if h.cfg.Limits.MaxObjectSize > 0 {
+		body = newLimitedReader(body, h.cfg.Limits.MaxObjectSize)
+	}
 
 	meta, err := h.storage.PutObject(key, contentType, userMetadata, body)
 	if err != nil {
-		s3.NewError(s3.ErrInternalError, "/"+bucket+"/"+key).WriteResponse(w)
+		if strings.Contains(err.Error(), "entity too large") {
+			s3.WriteErrorResponse(w, s3.ErrEntityTooLarge)
+			return
+		}
+		if strings.Contains(err.Error(), "invalid object key") {
+			s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
+			return
+		}
+		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
 
@@ -99,8 +183,14 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 
 // CopyObject handles PUT /{bucket}/{key} with X-Amz-Copy-Source header
 func (h *Handlers) CopyObject(w http.ResponseWriter, r *http.Request) {
-	bucket := r.PathValue("bucket")
+	dstBucket := r.PathValue("bucket")
 	dstKey := r.PathValue("key")
+
+	// Validate destination bucket
+	if dstBucket != h.cfg.Bucket.Name {
+		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
+		return
+	}
 
 	copySource := r.Header.Get("X-Amz-Copy-Source")
 
@@ -110,7 +200,7 @@ func (h *Handlers) CopyObject(w http.ResponseWriter, r *http.Request) {
 
 	parts := strings.SplitN(copySource, "/", 2)
 	if len(parts) != 2 {
-		s3.NewError(s3.ErrInvalidArgument, "/"+bucket+"/"+dstKey).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
 		return
 	}
 
@@ -119,7 +209,7 @@ func (h *Handlers) CopyObject(w http.ResponseWriter, r *http.Request) {
 
 	// Only support copying within the same bucket
 	if srcBucket != h.cfg.Bucket.Name {
-		s3.NewError(s3.ErrNoSuchBucket, "/"+srcBucket).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
 
@@ -127,10 +217,10 @@ func (h *Handlers) CopyObject(w http.ResponseWriter, r *http.Request) {
 	meta, err := h.storage.CopyObject(srcKey, dstKey)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			s3.NewError(s3.ErrNoSuchKey, "/"+srcBucket+"/"+srcKey).WriteResponse(w)
+			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
 			return
 		}
-		s3.NewError(s3.ErrInternalError, "/"+bucket+"/"+dstKey).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
 
@@ -150,7 +240,7 @@ func (h *Handlers) GetObject(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 
 	if bucket != h.cfg.Bucket.Name {
-		s3.NewError(s3.ErrNoSuchBucket, "/"+bucket).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
 
@@ -168,10 +258,10 @@ func (h *Handlers) GetObject(w http.ResponseWriter, r *http.Request) {
 	reader, meta, err := h.storage.GetObject(key)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			s3.NewError(s3.ErrNoSuchKey, "/"+bucket+"/"+key).WriteResponse(w)
+			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
 			return
 		}
-		s3.NewError(s3.ErrInternalError, "/"+bucket+"/"+key).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
 	defer reader.Close()
@@ -201,7 +291,8 @@ func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
 	metrics.DownloadsActive.Inc()
 	defer metrics.DownloadsActive.Dec()
 
-	bucket := r.PathValue("bucket")
+	// Note: bucket validation is done in GetObject before calling this handler
+	_ = r.PathValue("bucket")
 	key := r.PathValue("key")
 
 	rangeHeader := r.Header.Get("Range")
@@ -209,7 +300,7 @@ func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
 	// Parse range header: bytes=start-end or bytes=start- or bytes=-suffix
 	start, end, err := parseRangeHeader(rangeHeader)
 	if err != nil {
-		s3.NewError(s3.ErrInvalidArgument, "/"+bucket+"/"+key).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
 		return
 	}
 
@@ -217,10 +308,10 @@ func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
 	meta, err := h.storage.HeadObject(key)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			s3.NewError(s3.ErrNoSuchKey, "/"+bucket+"/"+key).WriteResponse(w)
+			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
 			return
 		}
-		s3.NewError(s3.ErrInternalError, "/"+bucket+"/"+key).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
 
@@ -247,7 +338,7 @@ func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
 
 	reader, _, err := h.storage.GetObjectRange(key, start, end)
 	if err != nil {
-		s3.NewError(s3.ErrInternalError, "/"+bucket+"/"+key).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
 	defer reader.Close()
@@ -276,6 +367,11 @@ func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
 
 // applyResponseHeaderOverrides applies response header overrides from presigned URL query parameters.
 // Only applies overrides for presigned requests.
+// validateHeaderValue checks if a header value is safe (no CRLF injection)
+func validateHeaderValue(value string) bool {
+	return !strings.ContainsAny(value, "\r\n\x00")
+}
+
 func applyResponseHeaderOverrides(w http.ResponseWriter, r *http.Request) {
 	// Only apply overrides for presigned requests
 	if !auth.IsPresignedRequest(r) {
@@ -284,43 +380,63 @@ func applyResponseHeaderOverrides(w http.ResponseWriter, r *http.Request) {
 
 	query := r.URL.Query()
 
-	if v := query.Get("response-content-type"); v != "" {
+	// Validate all header values to prevent CRLF injection
+	if v := query.Get("response-content-type"); v != "" && validateHeaderValue(v) {
 		w.Header().Set("Content-Type", v)
 	}
-	if v := query.Get("response-content-disposition"); v != "" {
+	if v := query.Get("response-content-disposition"); v != "" && validateHeaderValue(v) {
 		w.Header().Set("Content-Disposition", v)
 	}
-	if v := query.Get("response-cache-control"); v != "" {
+	if v := query.Get("response-cache-control"); v != "" && validateHeaderValue(v) {
 		w.Header().Set("Cache-Control", v)
 	}
 }
 
 // parseRangeHeader parses a Range header value
 // Returns start, end (-1 means unspecified)
+// Validates that values are within safe bounds to prevent integer overflow
 func parseRangeHeader(rangeHeader string) (start, end int64, err error) {
 	if !strings.HasPrefix(rangeHeader, "bytes=") {
-		return 0, 0, fmt.Errorf("invalid range header")
+		return 0, 0, fmt.Errorf("invalid range header: must start with 'bytes='")
 	}
 
 	rangeSpec := strings.TrimPrefix(rangeHeader, "bytes=")
+
+	// Reject multiple ranges (not supported)
+	if strings.Contains(rangeSpec, ",") {
+		return 0, 0, fmt.Errorf("invalid range: multiple ranges not supported")
+	}
+
 	parts := strings.Split(rangeSpec, "-")
 	if len(parts) != 2 {
 		return 0, 0, fmt.Errorf("invalid range format")
 	}
 
+	// Maximum safe value for range (to prevent overflow)
+	const maxRangeValue = math.MaxInt64 / 2
+
 	// Parse start
 	if parts[0] == "" {
 		// Suffix range: -N
+		if parts[1] == "" {
+			return 0, 0, fmt.Errorf("invalid range: both start and end are empty")
+		}
 		end, err = strconv.ParseInt(parts[1], 10, 64)
 		if err != nil {
-			return 0, 0, fmt.Errorf("invalid range end")
+			return 0, 0, fmt.Errorf("invalid range end: %w", err)
+		}
+		if end < 0 || end > maxRangeValue {
+			return 0, 0, fmt.Errorf("invalid range: end value out of bounds")
 		}
 		return -end, -1, nil
 	}
 
 	start, err = strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
-		return 0, 0, fmt.Errorf("invalid range start")
+		return 0, 0, fmt.Errorf("invalid range start: %w", err)
+	}
+	if start < 0 || start > maxRangeValue {
+		return 0, 0, fmt.Errorf("invalid range: start value out of bounds")
 	}
 
 	// Parse end
@@ -331,7 +447,15 @@ func parseRangeHeader(rangeHeader string) (start, end int64, err error) {
 
 	end, err = strconv.ParseInt(parts[1], 10, 64)
 	if err != nil {
-		return 0, 0, fmt.Errorf("invalid range end")
+		return 0, 0, fmt.Errorf("invalid range end: %w", err)
+	}
+	if end < 0 || end > maxRangeValue {
+		return 0, 0, fmt.Errorf("invalid range: end value out of bounds")
+	}
+
+	// Validate start <= end
+	if start > end {
+		return 0, 0, fmt.Errorf("invalid range: start > end")
 	}
 
 	return start, end, nil
@@ -343,17 +467,17 @@ func (h *Handlers) HeadObject(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 
 	if bucket != h.cfg.Bucket.Name {
-		s3.NewError(s3.ErrNoSuchBucket, "/"+bucket).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
 
 	meta, err := h.storage.HeadObject(key)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			s3.NewError(s3.ErrNoSuchKey, "/"+bucket+"/"+key).WriteResponse(w)
+			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
 			return
 		}
-		s3.NewError(s3.ErrInternalError, "/"+bucket+"/"+key).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
 
@@ -377,7 +501,7 @@ func (h *Handlers) DeleteObject(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 
 	if bucket != h.cfg.Bucket.Name {
-		s3.NewError(s3.ErrNoSuchBucket, "/"+bucket).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
 
@@ -390,7 +514,7 @@ func (h *Handlers) DeleteObject(w http.ResponseWriter, r *http.Request) {
 
 	err := h.storage.DeleteObject(key)
 	if err != nil {
-		s3.NewError(s3.ErrInternalError, "/"+bucket+"/"+key).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
 
@@ -403,7 +527,7 @@ func (h *Handlers) CreateMultipartUpload(w http.ResponseWriter, r *http.Request)
 	key := r.PathValue("key")
 
 	if bucket != h.cfg.Bucket.Name {
-		s3.NewError(s3.ErrNoSuchBucket, "/"+bucket).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
 
@@ -412,19 +536,20 @@ func (h *Handlers) CreateMultipartUpload(w http.ResponseWriter, r *http.Request)
 		contentType = "application/octet-stream"
 	}
 
-	// Extract user metadata
-	userMetadata := make(map[string]string)
-	for name, values := range r.Header {
-		lowerName := strings.ToLower(name)
-		if strings.HasPrefix(lowerName, "x-amz-meta-") && len(values) > 0 {
-			metaKey := strings.TrimPrefix(lowerName, "x-amz-meta-")
-			userMetadata[metaKey] = values[0]
-		}
+	// Extract and validate user metadata
+	userMetadata, err := extractAndValidateMetadata(r.Header)
+	if err != nil {
+		s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
+		return
 	}
 
 	uploadID, err := h.storage.CreateMultipartUpload(key, contentType, userMetadata)
 	if err != nil {
-		s3.NewError(s3.ErrInternalError, "/"+bucket+"/"+key).WriteResponse(w)
+		if strings.Contains(err.Error(), "invalid object key") {
+			s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
+			return
+		}
+		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
 
@@ -446,7 +571,7 @@ func (h *Handlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 
 	if bucket != h.cfg.Bucket.Name {
-		s3.NewError(s3.ErrNoSuchBucket, "/"+bucket).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
 
@@ -455,25 +580,25 @@ func (h *Handlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 	partNumberStr := query.Get("partNumber")
 
 	if uploadID == "" || partNumberStr == "" {
-		s3.NewError(s3.ErrInvalidArgument, "/"+bucket+"/"+key).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
 		return
 	}
 
 	partNumber, err := strconv.Atoi(partNumberStr)
 	if err != nil || partNumber < 1 || partNumber > 10000 {
-		s3.NewError(s3.ErrInvalidArgument, "/"+bucket+"/"+key).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
 		return
 	}
 
 	// Verify upload exists and key matches
 	uploadMeta, err := h.storage.GetMultipartUpload(uploadID)
 	if err != nil {
-		s3.NewError(s3.ErrNoSuchUpload, "/"+bucket+"/"+key).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrNoSuchUpload)
 		return
 	}
 
 	if uploadMeta.Key != key {
-		s3.NewError(s3.ErrInvalidArgument, "/"+bucket+"/"+key).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
 		return
 	}
 
@@ -482,11 +607,20 @@ func (h *Handlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 	defer metrics.UploadsActive.Dec()
 
 	// Handle AWS chunked encoding
-	body := wrapBodyIfChunked(r.Body, r.Header.Get("Content-Encoding"), r.Header.Get("X-Amz-Content-Sha256"))
+	var body io.Reader = wrapBodyIfChunked(r.Body, r.Header.Get("Content-Encoding"), r.Header.Get("X-Amz-Content-Sha256"))
+
+	// Enforce maximum part size limit
+	if h.cfg.Limits.MaxPartSize > 0 {
+		body = newLimitedReader(body, h.cfg.Limits.MaxPartSize)
+	}
 
 	partMeta, err := h.storage.UploadPart(uploadID, partNumber, body)
 	if err != nil {
-		s3.NewError(s3.ErrInternalError, "/"+bucket+"/"+key).WriteResponse(w)
+		if strings.Contains(err.Error(), "entity too large") {
+			s3.WriteErrorResponse(w, s3.ErrEntityTooLarge)
+			return
+		}
+		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
 
@@ -500,7 +634,7 @@ func (h *Handlers) CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 	key := r.PathValue("key")
 
 	if bucket != h.cfg.Bucket.Name {
-		s3.NewError(s3.ErrNoSuchBucket, "/"+bucket).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
 
@@ -508,26 +642,29 @@ func (h *Handlers) CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 	uploadID := query.Get("uploadId")
 
 	if uploadID == "" {
-		s3.NewError(s3.ErrInvalidArgument, "/"+bucket+"/"+key).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
 		return
 	}
 
 	// Verify upload exists and key matches
 	uploadMeta, err := h.storage.GetMultipartUpload(uploadID)
 	if err != nil {
-		s3.NewError(s3.ErrNoSuchUpload, "/"+bucket+"/"+key).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrNoSuchUpload)
 		return
 	}
 
 	if uploadMeta.Key != key {
-		s3.NewError(s3.ErrInvalidArgument, "/"+bucket+"/"+key).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
 		return
 	}
 
-	// Parse request body
+	// Parse request body with size limit to prevent XML bomb attacks
+	// Limit to 1MB which is more than enough for 10,000 parts
+	const maxXMLBodySize = 1 * 1024 * 1024
+	limitedBody := io.LimitReader(r.Body, maxXMLBodySize)
 	var completeReq s3.CompleteMultipartUpload
-	if err := xml.NewDecoder(r.Body).Decode(&completeReq); err != nil {
-		s3.NewError(s3.ErrMalformedXML, "/"+bucket+"/"+key).WriteResponse(w)
+	if err := xml.NewDecoder(limitedBody).Decode(&completeReq); err != nil {
+		s3.WriteErrorResponse(w, s3.ErrMalformedXML)
 		return
 	}
 
@@ -535,23 +672,24 @@ func (h *Handlers) CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 	objMeta, err := h.storage.CompleteMultipartUpload(uploadID, completeReq.Parts)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			s3.NewError(s3.ErrInvalidPart, "/"+bucket+"/"+key).WriteResponse(w)
+			s3.WriteErrorResponse(w, s3.ErrInvalidPart)
 			return
 		}
 		if strings.Contains(err.Error(), "order") {
-			s3.NewError(s3.ErrInvalidPartOrder, "/"+bucket+"/"+key).WriteResponse(w)
+			s3.WriteErrorResponse(w, s3.ErrInvalidPartOrder)
 			return
 		}
-		s3.NewError(s3.ErrInternalError, "/"+bucket+"/"+key).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
 
 	result := s3.CompleteMultipartUploadResult{
-		Xmlns:    "http://s3.amazonaws.com/doc/2006-03-01/",
-		Location: "http://" + r.Host + "/" + bucket + "/" + key,
-		Bucket:   bucket,
-		Key:      key,
-		ETag:     objMeta.ETag,
+		Xmlns:  "http://s3.amazonaws.com/doc/2006-03-01/",
+		Bucket: bucket,
+		Key:    key,
+		ETag:   objMeta.ETag,
+		// Location intentionally omitted to prevent host header injection
+		// Clients should construct the URL from Bucket and Key if needed
 	}
 
 	w.Header().Set("Content-Type", "application/xml")
@@ -565,7 +703,7 @@ func (h *Handlers) AbortMultipartUpload(w http.ResponseWriter, r *http.Request) 
 	key := r.PathValue("key")
 
 	if bucket != h.cfg.Bucket.Name {
-		s3.NewError(s3.ErrNoSuchBucket, "/"+bucket).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
 
@@ -573,24 +711,24 @@ func (h *Handlers) AbortMultipartUpload(w http.ResponseWriter, r *http.Request) 
 	uploadID := query.Get("uploadId")
 
 	if uploadID == "" {
-		s3.NewError(s3.ErrInvalidArgument, "/"+bucket+"/"+key).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
 		return
 	}
 
 	// Verify upload exists
 	uploadMeta, err := h.storage.GetMultipartUpload(uploadID)
 	if err != nil {
-		s3.NewError(s3.ErrNoSuchUpload, "/"+bucket+"/"+key).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrNoSuchUpload)
 		return
 	}
 
 	if uploadMeta.Key != key {
-		s3.NewError(s3.ErrInvalidArgument, "/"+bucket+"/"+key).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
 		return
 	}
 
 	if err := h.storage.AbortMultipartUpload(uploadID); err != nil {
-		s3.NewError(s3.ErrInternalError, "/"+bucket+"/"+key).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
 
@@ -612,7 +750,7 @@ func (h *Handlers) PostObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s3.NewError(s3.ErrInvalidRequest, r.URL.Path).WriteResponse(w)
+	s3.WriteErrorResponse(w, s3.ErrInvalidRequest)
 }
 
 // GetBucket handles GET /{bucket} for listing objects or bucket operations
@@ -620,7 +758,7 @@ func (h *Handlers) GetBucket(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 
 	if bucket != h.cfg.Bucket.Name {
-		s3.NewError(s3.ErrNoSuchBucket, "/"+bucket).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
 
@@ -641,10 +779,14 @@ func (h *Handlers) ListObjectsV2(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 	query := r.URL.Query()
 
-	maxKeys := 1000
+	maxKeys := maxKeysLimit
 	if maxKeysStr := query.Get("max-keys"); maxKeysStr != "" {
 		if mk, err := strconv.Atoi(maxKeysStr); err == nil && mk > 0 {
 			maxKeys = mk
+			// Cap max-keys immediately to prevent resource exhaustion
+			if maxKeys > maxKeysLimit {
+				maxKeys = maxKeysLimit
+			}
 		}
 	}
 
@@ -658,7 +800,7 @@ func (h *Handlers) ListObjectsV2(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.storage.ListObjects(opts)
 	if err != nil {
-		s3.NewError(s3.ErrInternalError, "/"+bucket).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
 
@@ -704,7 +846,7 @@ func (h *Handlers) PostBucket(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 
 	if bucket != h.cfg.Bucket.Name {
-		s3.NewError(s3.ErrNoSuchBucket, "/"+bucket).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
 
@@ -715,17 +857,21 @@ func (h *Handlers) PostBucket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s3.NewError(s3.ErrInvalidRequest, "/"+bucket).WriteResponse(w)
+	s3.WriteErrorResponse(w, s3.ErrInvalidRequest)
 }
 
 // DeleteObjects handles POST /{bucket}?delete (batch delete)
 func (h *Handlers) DeleteObjects(w http.ResponseWriter, r *http.Request) {
-	bucket := r.PathValue("bucket")
+	// Note: bucket validation is done in PostBucket before calling this handler
+	_ = r.PathValue("bucket")
 
-	// Parse request body
+	// Parse request body with size limit to prevent XML bomb attacks
+	// Limit to 1MB which is more than enough for batch delete requests
+	const maxXMLBodySize = 1 * 1024 * 1024
+	limitedBody := io.LimitReader(r.Body, maxXMLBodySize)
 	var deleteReq s3.Delete
-	if err := xml.NewDecoder(r.Body).Decode(&deleteReq); err != nil {
-		s3.NewError(s3.ErrMalformedXML, "/"+bucket).WriteResponse(w)
+	if err := xml.NewDecoder(limitedBody).Decode(&deleteReq); err != nil {
+		s3.WriteErrorResponse(w, s3.ErrMalformedXML)
 		return
 	}
 

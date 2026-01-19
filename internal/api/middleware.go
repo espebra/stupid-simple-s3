@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,6 +22,67 @@ const (
 	credentialContextKey contextKey = "credential"
 	operationContextKey  contextKey = "operation"
 )
+
+// authFailureDelay is the duration to sleep on authentication failures
+// This slows down brute-force attacks without complex rate limiting
+const authFailureDelay = 100 * time.Millisecond
+
+// trustedProxyChecker validates if a request comes from a trusted proxy
+type trustedProxyChecker struct {
+	cidrs []*net.IPNet
+	ips   map[string]bool
+}
+
+// newTrustedProxyChecker creates a checker from a list of trusted proxy IPs/CIDRs
+func newTrustedProxyChecker(trustedProxies []string) *trustedProxyChecker {
+	checker := &trustedProxyChecker{
+		ips: make(map[string]bool),
+	}
+
+	for _, proxy := range trustedProxies {
+		proxy = strings.TrimSpace(proxy)
+		if proxy == "" {
+			continue
+		}
+
+		// Try to parse as CIDR
+		if _, cidr, err := net.ParseCIDR(proxy); err == nil {
+			checker.cidrs = append(checker.cidrs, cidr)
+		} else if ip := net.ParseIP(proxy); ip != nil {
+			// Plain IP
+			checker.ips[ip.String()] = true
+		}
+	}
+
+	return checker
+}
+
+// isTrusted checks if an IP is from a trusted proxy
+func (c *trustedProxyChecker) isTrusted(ipStr string) bool {
+	// If no trusted proxies configured, don't trust any proxy headers
+	if len(c.cidrs) == 0 && len(c.ips) == 0 {
+		return false
+	}
+
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+
+	// Check exact IP match
+	if c.ips[ip.String()] {
+		return true
+	}
+
+	// Check CIDR ranges
+	for _, cidr := range c.cidrs {
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
+}
 
 // responseWriter wraps http.ResponseWriter to capture status code and bytes written
 type responseWriter struct {
@@ -116,27 +178,37 @@ func AccessLogMiddleware(next http.Handler) http.Handler {
 }
 
 // getClientIP extracts the client IP from the request
+// This version does NOT trust proxy headers - use getClientIPWithTrust for that
 func getClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header (for proxies)
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Take the first IP in the list
-		if idx := strings.Index(xff, ","); idx != -1 {
-			return strings.TrimSpace(xff[:idx])
-		}
-		return strings.TrimSpace(xff)
-	}
-
-	// Check X-Real-IP header
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
-	}
-
-	// Fall back to RemoteAddr
 	addr := r.RemoteAddr
 	if idx := strings.LastIndex(addr, ":"); idx != -1 {
 		return addr[:idx]
 	}
 	return addr
+}
+
+// getClientIPWithTrust extracts the client IP, trusting proxy headers only from trusted sources
+func getClientIPWithTrust(r *http.Request, checker *trustedProxyChecker) string {
+	remoteIP := getClientIP(r)
+
+	// Only trust proxy headers if the direct connection is from a trusted proxy
+	if checker != nil && checker.isTrusted(remoteIP) {
+		// Check X-Forwarded-For header (for proxies)
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			// Take the first IP in the list (original client)
+			if idx := strings.Index(xff, ","); idx != -1 {
+				return strings.TrimSpace(xff[:idx])
+			}
+			return strings.TrimSpace(xff)
+		}
+
+		// Check X-Real-IP header
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			return xri
+		}
+	}
+
+	return remoteIP
 }
 
 // SetOperation middleware sets the operation name in the request context
@@ -212,49 +284,54 @@ func getErrorCodeFromStatus(status int) string {
 // AuthMiddleware creates middleware that verifies AWS Signature v4 authentication
 func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 	sigv4 := &auth.SignatureV4{}
+	proxyChecker := newTrustedProxyChecker(cfg.Server.TrustedProxies)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Check if this is a presigned URL request
 			if auth.IsPresignedRequest(r) {
-				handlePresignedAuth(w, r, cfg, sigv4, next)
+				handlePresignedAuth(w, r, cfg, sigv4, proxyChecker, next)
 				return
 			}
 
 			// Parse authorization header to get access key ID
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" {
+				time.Sleep(authFailureDelay) // Slow down brute-force attempts
 				metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonMissingHeader).Inc()
-				s3.NewError(s3.ErrAccessDenied, r.URL.Path).WriteResponse(w)
+				s3.WriteErrorResponse(w, s3.ErrAccessDenied)
 				return
 			}
 
 			parsed, err := sigv4.ParseAuthorization(authHeader)
 			if err != nil {
+				time.Sleep(authFailureDelay)
 				metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonMalformedHeader).Inc()
-				s3.NewError(s3.ErrAuthorizationHeaderMalformed, r.URL.Path).WriteResponse(w)
+				s3.WriteErrorResponse(w, s3.ErrAuthorizationHeaderMalformed)
 				return
 			}
 
 			// Look up credential
 			cred := cfg.GetCredential(parsed.AccessKeyID)
 			if cred == nil {
+				time.Sleep(authFailureDelay)
 				metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonInvalidAccessKey).Inc()
-				s3.NewError(s3.ErrInvalidAccessKeyId, r.URL.Path).WriteResponse(w)
+				s3.WriteErrorResponse(w, s3.ErrInvalidAccessKeyId)
 				return
 			}
 
 			// Verify signature
 			_, err = sigv4.VerifyRequest(r, cred.SecretAccessKey)
 			if err != nil {
+				time.Sleep(authFailureDelay)
 				// Check for specific error types
 				if strings.Contains(err.Error(), "skewed") {
 					metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonTimeSkew).Inc()
-					s3.NewError(s3.ErrRequestTimeTooSkewed, r.URL.Path).WriteResponse(w)
+					s3.WriteErrorResponse(w, s3.ErrRequestTimeTooSkewed)
 					return
 				}
 				metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonSignatureMismatch).Inc()
-				s3.NewError(s3.ErrSignatureDoesNotMatch, r.URL.Path).WriteResponse(w)
+				s3.WriteErrorResponse(w, s3.ErrSignatureDoesNotMatch)
 				return
 			}
 
@@ -266,39 +343,42 @@ func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 }
 
 // handlePresignedAuth handles authentication for presigned URL requests
-func handlePresignedAuth(w http.ResponseWriter, r *http.Request, cfg *config.Config, sigv4 *auth.SignatureV4, next http.Handler) {
+func handlePresignedAuth(w http.ResponseWriter, r *http.Request, cfg *config.Config, sigv4 *auth.SignatureV4, proxyChecker *trustedProxyChecker, next http.Handler) {
 	// Get access key ID from presigned URL
 	accessKeyID := auth.GetPresignedAccessKeyID(r)
 	if accessKeyID == "" {
+		time.Sleep(authFailureDelay)
 		metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonMalformedHeader).Inc()
-		s3.NewError(s3.ErrAuthorizationHeaderMalformed, r.URL.Path).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrAuthorizationHeaderMalformed)
 		return
 	}
 
 	// Look up credential
 	cred := cfg.GetCredential(accessKeyID)
 	if cred == nil {
+		time.Sleep(authFailureDelay)
 		metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonInvalidAccessKey).Inc()
-		s3.NewError(s3.ErrInvalidAccessKeyId, r.URL.Path).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrInvalidAccessKeyId)
 		return
 	}
 
 	// Verify presigned URL signature
 	_, err := sigv4.VerifyPresignedRequest(r, cred.SecretAccessKey)
 	if err != nil {
+		time.Sleep(authFailureDelay)
 		// Check for specific error types
 		if strings.Contains(err.Error(), "expired") {
 			metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonTimeSkew).Inc()
-			s3.NewError(s3.ErrExpiredToken, r.URL.Path).WriteResponse(w)
+			s3.WriteErrorResponse(w, s3.ErrExpiredToken)
 			return
 		}
 		if strings.Contains(err.Error(), "future") {
 			metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonTimeSkew).Inc()
-			s3.NewError(s3.ErrRequestTimeTooSkewed, r.URL.Path).WriteResponse(w)
+			s3.WriteErrorResponse(w, s3.ErrRequestTimeTooSkewed)
 			return
 		}
 		metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonSignatureMismatch).Inc()
-		s3.NewError(s3.ErrSignatureDoesNotMatch, r.URL.Path).WriteResponse(w)
+		s3.WriteErrorResponse(w, s3.ErrSignatureDoesNotMatch)
 		return
 	}
 
@@ -322,7 +402,7 @@ func RequireWritePrivilege(next http.Handler) http.Handler {
 		cred := GetCredential(r)
 		if cred == nil || !cred.CanWrite() {
 			metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonAccessDenied).Inc()
-			s3.NewError(s3.ErrAccessDenied, r.URL.Path).WriteResponse(w)
+			s3.WriteErrorResponse(w, s3.ErrAccessDenied)
 			return
 		}
 		next.ServeHTTP(w, r)

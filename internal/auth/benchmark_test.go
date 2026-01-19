@@ -53,7 +53,7 @@ func BenchmarkBuildCanonicalRequest(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_ = sigv4.buildCanonicalRequest(req, signedHeaders)
+		_, _ = sigv4.buildCanonicalRequest(req, signedHeaders)
 	}
 }
 
@@ -143,7 +143,7 @@ func createSignedRequestForBench(secretKey, accessKeyID string) *http.Request {
 
 	signedHeaders := []string{"host", "x-amz-content-sha256", "x-amz-date"}
 
-	canonicalRequest := sigv4.buildCanonicalRequest(req, signedHeaders)
+	canonicalRequest, _ := sigv4.buildCanonicalRequest(req, signedHeaders)
 	credentialScope := dateStamp + "/us-east-1/s3/aws4_request"
 	stringToSign := sigv4.buildStringToSign(amzDate, credentialScope, canonicalRequest)
 	signingKey := sigv4.deriveSigningKey(secretKey, dateStamp, "us-east-1", "s3")
@@ -189,7 +189,7 @@ func BenchmarkFullSignatureFlow(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		// Canonical request
-		canonicalRequest := sigv4.buildCanonicalRequest(req, signedHeaders)
+		canonicalRequest, _ := sigv4.buildCanonicalRequest(req, signedHeaders)
 
 		// Credential scope and string to sign
 		credentialScope := dateStamp + "/us-east-1/s3/aws4_request"

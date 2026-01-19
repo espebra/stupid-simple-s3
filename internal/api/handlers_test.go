@@ -1226,6 +1226,8 @@ func TestAccessLogMiddleware(t *testing.T) {
 }
 
 func TestGetClientIP(t *testing.T) {
+	// getClientIP should always return RemoteAddr, ignoring proxy headers
+	// This is a security measure - proxy headers are only trusted via getClientIPWithTrust
 	tests := []struct {
 		name       string
 		xff        string
@@ -1233,12 +1235,10 @@ func TestGetClientIP(t *testing.T) {
 		remoteAddr string
 		want       string
 	}{
-		{"X-Forwarded-For single", "192.168.1.1", "", "10.0.0.1:1234", "192.168.1.1"},
-		{"X-Forwarded-For multiple", "192.168.1.1, 10.0.0.2", "", "10.0.0.1:1234", "192.168.1.1"},
-		{"X-Real-IP", "", "192.168.1.1", "10.0.0.1:1234", "192.168.1.1"},
+		{"ignores X-Forwarded-For", "192.168.1.1", "", "10.0.0.1:1234", "10.0.0.1"},
+		{"ignores X-Real-IP", "", "192.168.1.1", "10.0.0.1:1234", "10.0.0.1"},
 		{"RemoteAddr with port", "", "", "10.0.0.1:1234", "10.0.0.1"},
 		{"RemoteAddr without port", "", "", "10.0.0.1", "10.0.0.1"},
-		{"X-Forwarded-For takes precedence", "192.168.1.1", "192.168.2.2", "10.0.0.1:1234", "192.168.1.1"},
 	}
 
 	for _, tt := range tests {
@@ -1258,6 +1258,79 @@ func TestGetClientIP(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetClientIPWithTrust(t *testing.T) {
+	// Test proxy header handling with trusted proxy configuration
+	trustedChecker := newTrustedProxyChecker([]string{"10.0.0.1", "172.16.0.0/12"})
+	untrustedChecker := newTrustedProxyChecker(nil)
+
+	t.Run("trusts X-Forwarded-For from trusted proxy", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.Header.Set("X-Forwarded-For", "192.168.1.1")
+		req.RemoteAddr = "10.0.0.1:1234"
+
+		got := getClientIPWithTrust(req, trustedChecker)
+		if got != "192.168.1.1" {
+			t.Errorf("getClientIPWithTrust() = %q, want %q", got, "192.168.1.1")
+		}
+	})
+
+	t.Run("trusts X-Real-IP from trusted proxy", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.Header.Set("X-Real-IP", "192.168.1.1")
+		req.RemoteAddr = "10.0.0.1:1234"
+
+		got := getClientIPWithTrust(req, trustedChecker)
+		if got != "192.168.1.1" {
+			t.Errorf("getClientIPWithTrust() = %q, want %q", got, "192.168.1.1")
+		}
+	})
+
+	t.Run("ignores proxy headers from untrusted source", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.Header.Set("X-Forwarded-For", "192.168.1.1")
+		req.RemoteAddr = "203.0.113.1:1234" // Not in trusted list
+
+		got := getClientIPWithTrust(req, trustedChecker)
+		if got != "203.0.113.1" {
+			t.Errorf("getClientIPWithTrust() = %q, want %q", got, "203.0.113.1")
+		}
+	})
+
+	t.Run("ignores proxy headers when no trusted proxies configured", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.Header.Set("X-Forwarded-For", "192.168.1.1")
+		req.RemoteAddr = "10.0.0.1:1234"
+
+		got := getClientIPWithTrust(req, untrustedChecker)
+		if got != "10.0.0.1" {
+			t.Errorf("getClientIPWithTrust() = %q, want %q", got, "10.0.0.1")
+		}
+	})
+
+	t.Run("trusts proxy from CIDR range", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.Header.Set("X-Forwarded-For", "192.168.1.1")
+		req.RemoteAddr = "172.20.0.5:1234" // In 172.16.0.0/12
+
+		got := getClientIPWithTrust(req, trustedChecker)
+		if got != "192.168.1.1" {
+			t.Errorf("getClientIPWithTrust() = %q, want %q", got, "192.168.1.1")
+		}
+	})
+
+	t.Run("X-Forwarded-For takes precedence over X-Real-IP", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.Header.Set("X-Forwarded-For", "192.168.1.1")
+		req.Header.Set("X-Real-IP", "192.168.2.2")
+		req.RemoteAddr = "10.0.0.1:1234"
+
+		got := getClientIPWithTrust(req, trustedChecker)
+		if got != "192.168.1.1" {
+			t.Errorf("getClientIPWithTrust() = %q, want %q", got, "192.168.1.1")
+		}
+	})
 }
 
 func TestPresignedResponseHeaderOverrides(t *testing.T) {
@@ -1363,6 +1436,207 @@ func TestPresignedResponseHeaderOverrides(t *testing.T) {
 		// Should not have Content-Disposition set
 		if got := w.Header().Get("Content-Disposition"); got != "" {
 			t.Errorf("Content-Disposition = %q, want empty (should not be set)", got)
+		}
+	})
+}
+
+// Security Tests
+
+func TestMetadataValidation(t *testing.T) {
+	t.Run("valid metadata values", func(t *testing.T) {
+		validValues := []string{
+			"normal value",
+			"value with spaces",
+			"123456",
+			"special-chars_allowed.here",
+		}
+		for _, v := range validValues {
+			if err := validateMetadataValue(v); err != nil {
+				t.Errorf("validateMetadataValue(%q) = %v, want nil", v, err)
+			}
+		}
+	})
+
+	t.Run("invalid metadata with CRLF injection", func(t *testing.T) {
+		invalidValues := []string{
+			"value\r\nInjected-Header: malicious",
+			"value\rcarriage-return",
+			"value\nnewline",
+			"value\x00null-byte",
+		}
+		for _, v := range invalidValues {
+			if err := validateMetadataValue(v); err == nil {
+				t.Errorf("validateMetadataValue(%q) = nil, want error", v)
+			}
+		}
+	})
+
+	t.Run("PutObject rejects invalid metadata", func(t *testing.T) {
+		handlers, _, cleanup := setupTestHandlers(t)
+		defer cleanup()
+
+		req := httptest.NewRequest("PUT", "/test-bucket/test.txt", bytes.NewReader([]byte("content")))
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", "test.txt")
+		req.Header.Set("Content-Type", "text/plain")
+		req.Header.Set("X-Amz-Meta-Malicious", "value\r\nX-Injected: evil")
+		w := httptest.NewRecorder()
+
+		handlers.PutObject(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d for CRLF injection attempt", w.Code, http.StatusBadRequest)
+		}
+	})
+}
+
+func TestRangeHeaderValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		rangeHeader string
+		wantErr     bool
+	}{
+		// Valid ranges
+		{"valid full range", "bytes=0-100", false},
+		{"valid suffix range", "bytes=-100", false},
+		{"valid open-ended range", "bytes=100-", false},
+
+		// Invalid ranges
+		{"missing bytes prefix", "0-100", true},
+		{"multiple ranges", "bytes=0-100,200-300", true},
+		{"empty range spec", "bytes=-", true},
+		{"invalid start", "bytes=abc-100", true},
+		{"invalid end", "bytes=0-xyz", true},
+		{"start > end", "bytes=100-50", true},
+		{"very large value", "bytes=0-9999999999999999999999", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := parseRangeHeader(tt.rangeHeader)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseRangeHeader(%q) error = %v, wantErr %v", tt.rangeHeader, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestMaxKeysValidation(t *testing.T) {
+	handlers, _, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	// Create a few test objects
+	for i := 0; i < 5; i++ {
+		key := "test-" + string(rune('a'+i)) + ".txt"
+		req := httptest.NewRequest("PUT", "/test-bucket/"+key, bytes.NewReader([]byte("content")))
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", key)
+		handlers.PutObject(httptest.NewRecorder(), req)
+	}
+
+	t.Run("max-keys capped at 1000", func(t *testing.T) {
+		// Request with max-keys > 1000 should be capped
+		req := httptest.NewRequest("GET", "/test-bucket?list-type=2&max-keys=9999999", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		w := httptest.NewRecorder()
+
+		handlers.ListObjectsV2(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+
+		var result s3.ListBucketResultV2
+		if err := xml.NewDecoder(w.Body).Decode(&result); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		// MaxKeys in response should be capped at 1000
+		if result.MaxKeys > 1000 {
+			t.Errorf("MaxKeys = %d, want <= 1000", result.MaxKeys)
+		}
+	})
+}
+
+func TestErrorResponseNoResourcePath(t *testing.T) {
+	handlers, _, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	// Request a nonexistent object
+	req := httptest.NewRequest("GET", "/test-bucket/secret/path/file.txt", nil)
+	req.SetPathValue("bucket", "test-bucket")
+	req.SetPathValue("key", "secret/path/file.txt")
+	w := httptest.NewRecorder()
+
+	handlers.GetObject(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+
+	var errResp s3.Error
+	if err := xml.NewDecoder(w.Body).Decode(&errResp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+
+	// Resource field should be empty to prevent information disclosure
+	if errResp.Resource != "" {
+		t.Errorf("Resource = %q, want empty (information disclosure)", errResp.Resource)
+	}
+}
+
+func TestUploadSizeLimits(t *testing.T) {
+	// Create handlers with a small size limit for testing
+	tmpDir, err := os.MkdirTemp("", "sss-limit-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Bucket: config.Bucket{Name: "test-bucket"},
+		Storage: config.Storage{
+			Path:          filepath.Join(tmpDir, "data"),
+			MultipartPath: filepath.Join(tmpDir, "multipart"),
+		},
+		Limits: config.Limits{
+			MaxObjectSize: 100, // 100 bytes limit for testing
+			MaxPartSize:   100,
+		},
+	}
+
+	store, err := storage.NewFilesystemStorage(cfg.Storage.Path, cfg.Storage.MultipartPath)
+	if err != nil {
+		t.Fatalf("failed to create storage: %v", err)
+	}
+
+	handlers := NewHandlers(cfg, store)
+
+	t.Run("object within size limit succeeds", func(t *testing.T) {
+		content := bytes.Repeat([]byte("a"), 50) // 50 bytes, under limit
+		req := httptest.NewRequest("PUT", "/test-bucket/small.txt", bytes.NewReader(content))
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", "small.txt")
+		w := httptest.NewRecorder()
+
+		handlers.PutObject(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want %d for object under size limit", w.Code, http.StatusOK)
+		}
+	})
+
+	t.Run("object exceeding size limit fails", func(t *testing.T) {
+		content := bytes.Repeat([]byte("a"), 150) // 150 bytes, over limit
+		req := httptest.NewRequest("PUT", "/test-bucket/large.txt", bytes.NewReader(content))
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", "large.txt")
+		w := httptest.NewRecorder()
+
+		handlers.PutObject(w, req)
+
+		if w.Code != http.StatusRequestEntityTooLarge {
+			t.Errorf("status = %d, want %d for object over size limit", w.Code, http.StatusRequestEntityTooLarge)
 		}
 	})
 }

@@ -20,10 +20,15 @@ import (
 
 // CreateMultipartUpload initializes a new multipart upload
 func (fs *FilesystemStorage) CreateMultipartUpload(key string, contentType string, metadata map[string]string) (string, error) {
+	// Validate the key upfront to fail early
+	if err := ValidateKey(key); err != nil {
+		return "", err
+	}
+
 	uploadID := uuid.New().String()
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
-	if err := os.MkdirAll(uploadPath, 0755); err != nil {
+	if err := os.MkdirAll(uploadPath, 0700); err != nil {
 		return "", fmt.Errorf("creating upload directory: %w", err)
 	}
 
@@ -169,8 +174,11 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	}
 
 	// Create object directory
-	objPath := fs.keyToPath(uploadMeta.Key)
-	if err := os.MkdirAll(objPath, 0755); err != nil {
+	objPath, keyErr := fs.keyToPath(uploadMeta.Key)
+	if keyErr != nil {
+		return nil, keyErr
+	}
+	if err := os.MkdirAll(objPath, 0700); err != nil {
 		return nil, fmt.Errorf("creating object directory: %w", err)
 	}
 

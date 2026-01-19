@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -129,7 +130,10 @@ func (s *SignatureV4) VerifyRequest(r *http.Request, secretKey string) (*AuthRes
 	}
 
 	// Build canonical request
-	canonicalRequest := s.buildCanonicalRequest(r, parsed.SignedHeaders)
+	canonicalRequest, err := s.buildCanonicalRequest(r, parsed.SignedHeaders)
+	if err != nil {
+		return nil, err
+	}
 
 	// Build string to sign
 	credentialScope := fmt.Sprintf("%s/%s/%s/aws4_request", parsed.Date, parsed.Region, parsed.Service)
@@ -153,7 +157,7 @@ func (s *SignatureV4) VerifyRequest(r *http.Request, secretKey string) (*AuthRes
 }
 
 // buildCanonicalRequest creates the canonical request string
-func (s *SignatureV4) buildCanonicalRequest(r *http.Request, signedHeaders []string) string {
+func (s *SignatureV4) buildCanonicalRequest(r *http.Request, signedHeaders []string) (string, error) {
 	// HTTP method
 	method := r.Method
 
@@ -169,7 +173,10 @@ func (s *SignatureV4) buildCanonicalRequest(r *http.Request, signedHeaders []str
 	canonicalQueryString := s.buildCanonicalQueryString(r.URL.Query())
 
 	// Canonical headers
-	canonicalHeaders := s.buildCanonicalHeaders(r, signedHeaders)
+	canonicalHeaders, err := s.buildCanonicalHeaders(r, signedHeaders)
+	if err != nil {
+		return "", err
+	}
 
 	// Signed headers (lowercase, sorted, semicolon-separated)
 	signedHeadersStr := strings.Join(signedHeaders, ";")
@@ -189,7 +196,7 @@ func (s *SignatureV4) buildCanonicalRequest(r *http.Request, signedHeaders []str
 		payloadHash,
 	}, "\n")
 
-	return canonicalRequest
+	return canonicalRequest, nil
 }
 
 // buildCanonicalQueryString creates the canonical query string
@@ -218,23 +225,61 @@ func (s *SignatureV4) buildCanonicalQueryString(query url.Values) string {
 	return strings.Join(pairs, "&")
 }
 
+// ipHeaders lists headers that should contain valid IP addresses
+var ipHeaders = map[string]bool{
+	"client-ip":       true,
+	"x-client-ip":     true,
+	"x-forwarded-for": true,
+	"x-real-ip":       true,
+	"true-client-ip":  true,
+	"cf-connecting-ip": true,
+}
+
+// isValidIPHeader checks if a header value contains a valid IP address (or list of IPs)
+func isValidIPHeader(value string) bool {
+	if value == "" {
+		return true // Empty is acceptable
+	}
+
+	// X-Forwarded-For can contain multiple IPs separated by commas
+	parts := strings.Split(value, ",")
+	for _, part := range parts {
+		ip := strings.TrimSpace(part)
+		if ip == "" {
+			continue
+		}
+		// Check if it's a valid IPv4 or IPv6 address
+		if net.ParseIP(ip) == nil {
+			return false
+		}
+	}
+	return true
+}
+
 // buildCanonicalHeaders creates the canonical headers string
-func (s *SignatureV4) buildCanonicalHeaders(r *http.Request, signedHeaders []string) string {
+func (s *SignatureV4) buildCanonicalHeaders(r *http.Request, signedHeaders []string) (string, error) {
 	var headers []string
 
 	for _, h := range signedHeaders {
 		var value string
-		if h == "host" {
+		lowerH := strings.ToLower(h)
+		if lowerH == "host" {
 			value = r.Host
 		} else {
 			value = r.Header.Get(h)
 		}
 		// Trim whitespace and convert sequential spaces to single space
 		value = strings.TrimSpace(value)
-		headers = append(headers, strings.ToLower(h)+":"+value+"\n")
+
+		// Validate IP-related headers contain valid IP addresses
+		if ipHeaders[lowerH] && !isValidIPHeader(value) {
+			return "", fmt.Errorf("invalid IP address in header %s", h)
+		}
+
+		headers = append(headers, lowerH+":"+value+"\n")
 	}
 
-	return strings.Join(headers, "")
+	return strings.Join(headers, ""), nil
 }
 
 // buildStringToSign creates the string to sign
@@ -379,7 +424,10 @@ func (s *SignatureV4) VerifyPresignedRequest(r *http.Request, secretKey string) 
 	}
 
 	// Build canonical request for presigned URL
-	canonicalRequest := s.buildPresignedCanonicalRequest(r, parsed)
+	canonicalRequest, err := s.buildPresignedCanonicalRequest(r, parsed)
+	if err != nil {
+		return nil, err
+	}
 
 	// Build string to sign
 	credentialScope := fmt.Sprintf("%s/%s/%s/aws4_request", parsed.Date, parsed.Region, parsed.Service)
@@ -403,7 +451,7 @@ func (s *SignatureV4) VerifyPresignedRequest(r *http.Request, secretKey string) 
 }
 
 // buildPresignedCanonicalRequest creates the canonical request for presigned URLs
-func (s *SignatureV4) buildPresignedCanonicalRequest(r *http.Request, parsed *ParsedPresignedURL) string {
+func (s *SignatureV4) buildPresignedCanonicalRequest(r *http.Request, parsed *ParsedPresignedURL) (string, error) {
 	// HTTP method
 	method := r.Method
 
@@ -418,7 +466,10 @@ func (s *SignatureV4) buildPresignedCanonicalRequest(r *http.Request, parsed *Pa
 	canonicalQueryString := s.buildPresignedCanonicalQueryString(r.URL.Query())
 
 	// Canonical headers
-	canonicalHeaders := s.buildCanonicalHeaders(r, parsed.SignedHeaders)
+	canonicalHeaders, err := s.buildCanonicalHeaders(r, parsed.SignedHeaders)
+	if err != nil {
+		return "", err
+	}
 
 	// Signed headers
 	signedHeadersStr := strings.Join(parsed.SignedHeaders, ";")
@@ -435,7 +486,7 @@ func (s *SignatureV4) buildPresignedCanonicalRequest(r *http.Request, parsed *Pa
 		payloadHash,
 	}, "\n")
 
-	return canonicalRequest
+	return canonicalRequest, nil
 }
 
 // buildPresignedCanonicalQueryString creates the canonical query string for presigned URLs

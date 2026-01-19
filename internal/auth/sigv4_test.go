@@ -251,12 +251,96 @@ func TestBuildCanonicalHeaders(t *testing.T) {
 	req.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
 
 	signedHeaders := []string{"host", "x-amz-content-sha256", "x-amz-date"}
-	result := sigv4.buildCanonicalHeaders(req, signedHeaders)
+	result, err := sigv4.buildCanonicalHeaders(req, signedHeaders)
+	if err != nil {
+		t.Fatalf("buildCanonicalHeaders returned error: %v", err)
+	}
 
 	expected := "host:example.com\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:20230101T000000Z\n"
 	if result != expected {
 		t.Errorf("canonical headers:\ngot:  %q\nwant: %q", result, expected)
 	}
+}
+
+func TestBuildCanonicalHeadersIPValidation(t *testing.T) {
+	sigv4 := &SignatureV4{}
+
+	t.Run("valid client-ip header", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "http://example.com/", nil)
+		req.Header.Set("Client-IP", "192.168.1.1")
+
+		signedHeaders := []string{"client-ip", "host"}
+		_, err := sigv4.buildCanonicalHeaders(req, signedHeaders)
+		if err != nil {
+			t.Errorf("expected no error for valid IP, got: %v", err)
+		}
+	})
+
+	t.Run("valid x-forwarded-for with multiple IPs", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "http://example.com/", nil)
+		req.Header.Set("X-Forwarded-For", "192.168.1.1, 10.0.0.1, 172.16.0.1")
+
+		signedHeaders := []string{"host", "x-forwarded-for"}
+		_, err := sigv4.buildCanonicalHeaders(req, signedHeaders)
+		if err != nil {
+			t.Errorf("expected no error for valid IPs, got: %v", err)
+		}
+	})
+
+	t.Run("valid IPv6 address", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "http://example.com/", nil)
+		req.Header.Set("X-Real-IP", "2001:db8::1")
+
+		signedHeaders := []string{"host", "x-real-ip"}
+		_, err := sigv4.buildCanonicalHeaders(req, signedHeaders)
+		if err != nil {
+			t.Errorf("expected no error for valid IPv6, got: %v", err)
+		}
+	})
+
+	t.Run("invalid client-ip header", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "http://example.com/", nil)
+		req.Header.Set("Client-IP", "not-an-ip-address")
+
+		signedHeaders := []string{"client-ip", "host"}
+		_, err := sigv4.buildCanonicalHeaders(req, signedHeaders)
+		if err == nil {
+			t.Error("expected error for invalid IP, got nil")
+		}
+	})
+
+	t.Run("injection attempt in client-ip", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "http://example.com/", nil)
+		req.Header.Set("Client-IP", "192.168.1.1\r\nX-Injected: malicious")
+
+		signedHeaders := []string{"client-ip", "host"}
+		_, err := sigv4.buildCanonicalHeaders(req, signedHeaders)
+		if err == nil {
+			t.Error("expected error for injection attempt, got nil")
+		}
+	})
+
+	t.Run("invalid IP in x-forwarded-for list", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "http://example.com/", nil)
+		req.Header.Set("X-Forwarded-For", "192.168.1.1, malicious-data, 10.0.0.1")
+
+		signedHeaders := []string{"host", "x-forwarded-for"}
+		_, err := sigv4.buildCanonicalHeaders(req, signedHeaders)
+		if err == nil {
+			t.Error("expected error for invalid IP in list, got nil")
+		}
+	})
+
+	t.Run("empty ip header is allowed", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "http://example.com/", nil)
+		// Client-IP not set, so it will be empty
+
+		signedHeaders := []string{"client-ip", "host"}
+		_, err := sigv4.buildCanonicalHeaders(req, signedHeaders)
+		if err != nil {
+			t.Errorf("expected no error for empty IP header, got: %v", err)
+		}
+	})
 }
 
 func TestBuildStringToSign(t *testing.T) {
@@ -294,7 +378,7 @@ func createSignedRequest(method, path string, secretKey, accessKeyID string) *ht
 
 	signedHeaders := []string{"host", "x-amz-content-sha256", "x-amz-date"}
 
-	canonicalRequest := sigv4.buildCanonicalRequest(req, signedHeaders)
+	canonicalRequest, _ := sigv4.buildCanonicalRequest(req, signedHeaders)
 	credentialScope := dateStamp + "/us-east-1/s3/aws4_request"
 	stringToSign := sigv4.buildStringToSign(amzDate, credentialScope, canonicalRequest)
 	signingKey := sigv4.deriveSigningKey(secretKey, dateStamp, "us-east-1", "s3")
@@ -521,7 +605,7 @@ func createPresignedRequest(method, path string, secretKey, accessKeyID string, 
 		AmzDate:       amzDate,
 	}
 
-	canonicalRequest := sigv4.buildPresignedCanonicalRequest(req, parsed)
+	canonicalRequest, _ := sigv4.buildPresignedCanonicalRequest(req, parsed)
 	credentialScope := dateStamp + "/us-east-1/s3/aws4_request"
 	stringToSign := sigv4.buildStringToSign(amzDate, credentialScope, canonicalRequest)
 	signingKey := sigv4.deriveSigningKey(secretKey, dateStamp, "us-east-1", "s3")

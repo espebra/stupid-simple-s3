@@ -37,6 +37,11 @@ The service is configured using environment variables:
 | `STUPID_RW_SECRET_KEY` | Read-write user secret key | (optional) |
 | `STUPID_METRICS_USERNAME` | Username for /metrics basic auth | (optional) |
 | `STUPID_METRICS_PASSWORD` | Password for /metrics basic auth | (optional) |
+| `STUPID_MAX_OBJECT_SIZE` | Maximum object size in bytes | `5368709120` (5GB) |
+| `STUPID_MAX_PART_SIZE` | Maximum multipart part size in bytes | `5368709120` (5GB) |
+| `STUPID_TRUSTED_PROXIES` | Comma-separated list of trusted proxy IPs/CIDRs | (optional) |
+| `STUPID_READ_TIMEOUT` | Maximum duration for reading requests | `30m` |
+| `STUPID_WRITE_TIMEOUT` | Maximum duration for writing responses | `30m` |
 
 At least one credential pair (read-only or read-write) must be provided.
 
@@ -219,6 +224,18 @@ server {
     }
 }
 ```
+
+When using a reverse proxy, configure `STUPID_TRUSTED_PROXIES` to trust the proxy's IP headers:
+
+```bash
+# Trust the local nginx proxy
+export STUPID_TRUSTED_PROXIES="127.0.0.1"
+
+# Trust multiple proxies or CIDR ranges
+export STUPID_TRUSTED_PROXIES="127.0.0.1,10.0.0.0/8,192.168.1.0/24"
+```
+
+Without this configuration, the service ignores `X-Forwarded-For` and `X-Real-IP` headers for security.
 
 Example Varnish VCL configuration (use with [hitch](https://github.com/varnish/hitch) for TLS termination):
 
