@@ -55,8 +55,17 @@ func (s *Server) Handler() http.Handler {
 	metricsHandler := metricsAuth(promhttp.Handler())
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/metrics" {
+		switch r.URL.Path {
+		case "/metrics":
 			metricsHandler.ServeHTTP(w, r)
+			return
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("ok"))
+			return
+		case "/readyz":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("ok"))
 			return
 		}
 		s.mux.ServeHTTP(w, r)
