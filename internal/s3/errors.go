@@ -29,6 +29,8 @@ const (
 	ErrIncompleteBody               ErrorCode = "IncompleteBody"
 	ErrAuthorizationHeaderMalformed ErrorCode = "AuthorizationHeaderMalformed"
 	ErrExpiredToken                 ErrorCode = "ExpiredToken"
+	ErrEntityTooLarge               ErrorCode = "EntityTooLarge"
+	ErrInvalidRange                 ErrorCode = "InvalidRange"
 )
 
 var errorStatusCodes = map[ErrorCode]int{
@@ -53,6 +55,8 @@ var errorStatusCodes = map[ErrorCode]int{
 	ErrIncompleteBody:               http.StatusBadRequest,
 	ErrAuthorizationHeaderMalformed: http.StatusBadRequest,
 	ErrExpiredToken:                 http.StatusForbidden,
+	ErrEntityTooLarge:               http.StatusRequestEntityTooLarge,
+	ErrInvalidRange:                 http.StatusRequestedRangeNotSatisfiable,
 }
 
 var errorMessages = map[ErrorCode]string{
@@ -77,6 +81,8 @@ var errorMessages = map[ErrorCode]string{
 	ErrIncompleteBody:               "You did not provide the number of bytes specified by the Content-Length HTTP header.",
 	ErrAuthorizationHeaderMalformed: "The authorization header is malformed.",
 	ErrExpiredToken:                 "The provided token has expired.",
+	ErrEntityTooLarge:               "Your proposed upload exceeds the maximum allowed object size.",
+	ErrInvalidRange:                 "The requested range is not valid.",
 }
 
 type Error struct {
@@ -110,4 +116,17 @@ func (e *Error) WriteResponse(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(e.StatusCode())
 	_ = xml.NewEncoder(w).Encode(e)
+}
+
+// WriteErrorResponse writes an error response without including the resource path.
+// This prevents information disclosure in error messages.
+func WriteErrorResponse(w http.ResponseWriter, code ErrorCode) {
+	err := &Error{
+		Code:    code,
+		Message: errorMessages[code],
+		// Intentionally omit Resource to prevent information disclosure
+	}
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(err.StatusCode())
+	_ = xml.NewEncoder(w).Encode(err)
 }

@@ -30,7 +30,7 @@ type CompletedPartInput struct {
 type CompleteMultipartUploadResult struct {
 	XMLName  xml.Name `xml:"CompleteMultipartUploadResult"`
 	Xmlns    string   `xml:"xmlns,attr"`
-	Location string   `xml:"Location"`
+	Location string   `xml:"Location,omitempty"` // Optional - omit to avoid host header injection
 	Bucket   string   `xml:"Bucket"`
 	Key      string   `xml:"Key"`
 	ETag     string   `xml:"ETag"`
