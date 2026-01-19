@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -40,6 +41,18 @@ func (rw *responseWriter) WriteHeader(code int) {
 func (rw *responseWriter) Write(b []byte) (int, error) {
 	n, err := rw.ResponseWriter.Write(b)
 	rw.bytesWritten += int64(n)
+	return n, err
+}
+
+// countingReader wraps io.ReadCloser to count bytes read
+type countingReader struct {
+	io.ReadCloser
+	bytesRead int64
+}
+
+func (cr *countingReader) Read(p []byte) (int, error) {
+	n, err := cr.ReadCloser.Read(p)
+	cr.bytesRead += int64(n)
 	return n, err
 }
 
@@ -82,17 +95,20 @@ func AccessLogMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rw := newResponseWriter(w)
+		cr := &countingReader{ReadCloser: r.Body}
+		r.Body = cr
 
 		next.ServeHTTP(rw, r)
 
 		duration := time.Since(start)
 		clientIP := getClientIP(r)
 
-		log.Printf("%s %s %s %d %d %s",
+		log.Printf("%s %s %s %d %d %d %s",
 			clientIP,
 			r.Method,
 			r.URL.RequestURI(),
 			rw.statusCode,
+			cr.bytesRead,
 			rw.bytesWritten,
 			duration,
 		)
