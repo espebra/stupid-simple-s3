@@ -1,8 +1,13 @@
 package main
 
 import (
-	"log"
+	"context"
+	"log/slog"
+	"net/http"
 	"os"
+	"os/signal"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/espen/stupid-simple-s3/internal/api"
@@ -10,18 +15,27 @@ import (
 	"github.com/espen/stupid-simple-s3/internal/storage"
 )
 
+// ShutdownTimeout is the maximum time to wait for graceful shutdown
+const ShutdownTimeout = 120 * time.Second
+
 func main() {
 	// Load configuration from environment variables
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		slog.Error("failed to load configuration", "error", err)
+		os.Exit(1)
 	}
-	cfg.Log()
+
+	// Configure structured logging
+	configureLogger(cfg.Log.Format, cfg.Log.Level)
+
+	cfg.LogConfiguration()
 
 	// Initialize storage (creates directories if they don't exist)
 	store, err := storage.NewFilesystemStorage(cfg.Storage.Path, cfg.Storage.MultipartPath)
 	if err != nil {
-		log.Fatalf("Failed to initialize storage: %v", err)
+		slog.Error("failed to initialize storage", "error", err)
+		os.Exit(1)
 	}
 
 	// Start cleanup job if enabled
@@ -29,24 +43,78 @@ func main() {
 		go runCleanupJob(store, cfg.Cleanup.GetInterval(), cfg.Cleanup.GetMaxAge())
 	}
 
-	// Create and start server
+	// Create server
 	server := api.NewServer(cfg, store)
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatalf("Server error: %v", err)
+
+	// Start server in goroutine
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("server error", "error", err)
+			os.Exit(1)
+		}
+	}()
+
+	// Wait for interrupt signal
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	sig := <-quit
+	slog.Info("received shutdown signal", "signal", sig.String())
+
+	// Graceful shutdown with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		slog.Error("shutdown error", "error", err)
 		os.Exit(1)
+	}
+
+	slog.Info("server stopped")
+}
+
+// configureLogger sets up the default slog logger
+func configureLogger(format, level string) {
+	opts := &slog.HandlerOptions{
+		Level: parseLogLevel(level),
+	}
+
+	var handler slog.Handler
+	if strings.ToLower(format) == "json" {
+		handler = slog.NewJSONHandler(os.Stdout, opts)
+	} else {
+		handler = slog.NewTextHandler(os.Stdout, opts)
+	}
+
+	slog.SetDefault(slog.New(handler))
+}
+
+// parseLogLevel converts a string log level to slog.Level
+func parseLogLevel(level string) slog.Level {
+	switch strings.ToLower(level) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
 	}
 }
 
 // runCleanupJob periodically cleans up stale multipart uploads
 func runCleanupJob(store storage.MultipartStorage, interval, maxAge time.Duration) {
-	log.Printf("Starting multipart upload cleanup job (interval: %s, max age: %s)", interval, maxAge)
+	slog.Info("starting multipart upload cleanup job",
+		"interval", interval.String(),
+		"max_age", maxAge.String(),
+	)
 
 	// Run immediately on startup
 	cleaned, err := store.CleanupStaleUploads(maxAge)
 	if err != nil {
-		log.Printf("Cleanup error: %v", err)
+		slog.Error("cleanup error", "error", err)
 	} else if cleaned > 0 {
-		log.Printf("Cleaned up %d stale multipart upload(s)", cleaned)
+		slog.Info("cleaned up stale multipart uploads", "count", cleaned)
 	}
 
 	// Then run periodically
@@ -56,9 +124,9 @@ func runCleanupJob(store storage.MultipartStorage, interval, maxAge time.Duratio
 	for range ticker.C {
 		cleaned, err := store.CleanupStaleUploads(maxAge)
 		if err != nil {
-			log.Printf("Cleanup error: %v", err)
+			slog.Error("cleanup error", "error", err)
 		} else if cleaned > 0 {
-			log.Printf("Cleaned up %d stale multipart upload(s)", cleaned)
+			slog.Info("cleaned up stale multipart uploads", "count", cleaned)
 		}
 	}
 }

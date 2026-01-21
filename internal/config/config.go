@@ -2,7 +2,7 @@ package config
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -97,6 +97,12 @@ func (m *MetricsAuth) Enabled() bool {
 	return m.Username != "" && m.Password != ""
 }
 
+// LogConfig holds logging configuration
+type LogConfig struct {
+	Format string // "json" or "text"
+	Level  string // "debug", "info", "warn", "error"
+}
+
 type Config struct {
 	Bucket      Bucket
 	Storage     Storage
@@ -105,6 +111,7 @@ type Config struct {
 	Cleanup     Cleanup
 	MetricsAuth MetricsAuth
 	Limits      Limits
+	Log         LogConfig
 }
 
 // Load creates a configuration from environment variables.
@@ -128,6 +135,8 @@ type Config struct {
 //   - STUPID_TRUSTED_PROXIES: Comma-separated list of trusted proxy IPs/CIDRs (optional)
 //   - STUPID_READ_TIMEOUT: Maximum duration for reading requests (default: "30m")
 //   - STUPID_WRITE_TIMEOUT: Maximum duration for writing responses (default: "30m")
+//   - STUPID_LOG_FORMAT: Log output format, "json" or "text" (default: "text")
+//   - STUPID_LOG_LEVEL: Log level, "debug", "info", "warn", "error" (default: "info")
 func Load() (*Config, error) {
 	host := os.Getenv("STUPID_HOST")
 	port := os.Getenv("STUPID_PORT")
@@ -184,6 +193,10 @@ func Load() (*Config, error) {
 		Limits: Limits{
 			MaxObjectSize: parseEnvInt64("STUPID_MAX_OBJECT_SIZE", DefaultMaxObjectSize),
 			MaxPartSize:   parseEnvInt64("STUPID_MAX_PART_SIZE", DefaultMaxPartSize),
+		},
+		Log: LogConfig{
+			Format: getEnvOrDefault("STUPID_LOG_FORMAT", "text"),
+			Level:  getEnvOrDefault("STUPID_LOG_LEVEL", "info"),
 		},
 	}
 
@@ -286,24 +299,31 @@ func (c *Credential) CanWrite() bool {
 	return c.Privileges == PrivilegeReadWrite
 }
 
-// Log prints the configuration to stdout, excluding secret values
-func (c *Config) Log() {
-	log.Println("Configuration:")
-	log.Printf("  Server address: %s", c.Server.Address)
-	log.Printf("  Bucket name: %s", c.Bucket.Name)
-	log.Printf("  Storage path: %s", c.Storage.Path)
-	log.Printf("  Multipart path: %s", c.Storage.MultipartPath)
-	log.Printf("  Cleanup enabled: %t", c.Cleanup.Enabled)
-	log.Printf("  Cleanup interval: %s", c.Cleanup.GetInterval())
-	log.Printf("  Cleanup max age: %s", c.Cleanup.GetMaxAge())
-	log.Printf("  Metrics auth enabled: %t", c.MetricsAuth.Enabled())
-	log.Printf("  Max object size: %d bytes", c.Limits.MaxObjectSize)
-	log.Printf("  Max part size: %d bytes", c.Limits.MaxPartSize)
-	log.Printf("  Trusted proxies: %d configured", len(c.Server.TrustedProxies))
-	log.Printf("  Read timeout: %s", c.Server.ReadTimeout)
-	log.Printf("  Write timeout: %s", c.Server.WriteTimeout)
-	log.Printf("  Credentials: %d configured", len(c.Credentials))
+// LogConfiguration prints the configuration using structured logging, excluding secret values
+func (c *Config) LogConfiguration() {
+	slog.Info("configuration loaded",
+		"server_address", c.Server.Address,
+		"bucket_name", c.Bucket.Name,
+		"storage_path", c.Storage.Path,
+		"multipart_path", c.Storage.MultipartPath,
+		"cleanup_enabled", c.Cleanup.Enabled,
+		"cleanup_interval", c.Cleanup.GetInterval().String(),
+		"cleanup_max_age", c.Cleanup.GetMaxAge().String(),
+		"metrics_auth_enabled", c.MetricsAuth.Enabled(),
+		"max_object_size", c.Limits.MaxObjectSize,
+		"max_part_size", c.Limits.MaxPartSize,
+		"trusted_proxies_count", len(c.Server.TrustedProxies),
+		"read_timeout", c.Server.ReadTimeout.String(),
+		"write_timeout", c.Server.WriteTimeout.String(),
+		"credentials_count", len(c.Credentials),
+		"log_format", c.Log.Format,
+		"log_level", c.Log.Level,
+	)
 	for i, cred := range c.Credentials {
-		log.Printf("    [%d] Access key: %s, Privileges: %s", i, cred.AccessKeyID, cred.Privileges)
+		slog.Info("credential configured",
+			"index", i,
+			"access_key", cred.AccessKeyID,
+			"privileges", cred.Privileges,
+		)
 	}
 }

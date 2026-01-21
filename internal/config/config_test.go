@@ -381,6 +381,6 @@ func TestConfigLog(t *testing.T) {
 		},
 	}
 
-	// Log() should not panic - just verify it runs
-	cfg.Log()
+	// LogConfiguration() should not panic - just verify it runs
+	cfg.LogConfiguration()
 }

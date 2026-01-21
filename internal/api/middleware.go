@@ -2,8 +2,10 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
@@ -21,7 +23,10 @@ type contextKey string
 const (
 	credentialContextKey contextKey = "credential"
 	operationContextKey  contextKey = "operation"
+	requestIDContextKey  contextKey = "request_id"
 )
+
+const requestIDHeader = "X-Request-ID"
 
 // authFailureDelay is the duration to sleep on authentication failures
 // This slows down brute-force attacks without complex rate limiting
@@ -118,6 +123,40 @@ func (cr *countingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// generateRequestID generates a random request ID
+func generateRequestID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "unknown"
+	}
+	return hex.EncodeToString(b)
+}
+
+// RequestIDMiddleware adds a request ID to the context and response header
+func RequestIDMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestID := r.Header.Get(requestIDHeader)
+		if requestID == "" {
+			requestID = generateRequestID()
+		}
+
+		// Set request ID in response header
+		w.Header().Set(requestIDHeader, requestID)
+
+		// Add to context
+		ctx := context.WithValue(r.Context(), requestIDContextKey, requestID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// GetRequestID retrieves the request ID from the request context
+func GetRequestID(r *http.Request) string {
+	if id, ok := r.Context().Value(requestIDContextKey).(string); ok {
+		return id
+	}
+	return ""
+}
+
 // MetricsMiddleware collects request metrics
 func MetricsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +191,7 @@ func MetricsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// AccessLogMiddleware logs HTTP requests in a common log format
+// AccessLogMiddleware logs HTTP requests using structured logging
 func AccessLogMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -164,15 +203,19 @@ func AccessLogMiddleware(next http.Handler) http.Handler {
 
 		duration := time.Since(start)
 		clientIP := getClientIP(r)
+		requestID := GetRequestID(r)
+		operation := getOperationFromContext(r)
 
-		log.Printf("%s %s %s %d %d %d %s",
-			clientIP,
-			r.Method,
-			r.URL.RequestURI(),
-			rw.statusCode,
-			cr.bytesRead,
-			rw.bytesWritten,
-			duration,
+		slog.Info("request",
+			"client_ip", clientIP,
+			"method", r.Method,
+			"path", r.URL.RequestURI(),
+			"status", rw.statusCode,
+			"bytes_in", cr.bytesRead,
+			"bytes_out", rw.bytesWritten,
+			"duration", duration.String(),
+			"request_id", requestID,
+			"operation", operation,
 		)
 	})
 }

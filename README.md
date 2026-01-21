@@ -42,6 +42,8 @@ The service is configured using environment variables:
 | `STUPID_TRUSTED_PROXIES` | Comma-separated list of trusted proxy IPs/CIDRs | (optional) |
 | `STUPID_READ_TIMEOUT` | Maximum duration for reading requests | `30m` |
 | `STUPID_WRITE_TIMEOUT` | Maximum duration for writing responses | `30m` |
+| `STUPID_LOG_FORMAT` | Log output format (`text` or `json`) | `text` |
+| `STUPID_LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | `info` |
 
 At least one credential pair (read-only or read-write) must be provided.
 

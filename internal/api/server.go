@@ -1,7 +1,8 @@
 package api
 
 import (
-	"log"
+	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -26,9 +27,10 @@ const (
 
 // Server is the S3 HTTP server
 type Server struct {
-	cfg      *config.Config
-	handlers *Handlers
-	mux      *http.ServeMux
+	cfg        *config.Config
+	handlers   *Handlers
+	mux        *http.ServeMux
+	httpServer *http.Server
 }
 
 // NewServer creates a new S3 server
@@ -84,14 +86,15 @@ func (s *Server) Handler() http.Handler {
 		}
 		s.mux.ServeHTTP(w, r)
 	})
-	return AccessLogMiddleware(handler)
+	// Apply middlewares: RequestID first, then AccessLog
+	return RequestIDMiddleware(AccessLogMiddleware(handler))
 }
 
 // ListenAndServe starts the server with security-hardened timeouts
 func (s *Server) ListenAndServe() error {
-	log.Printf("Starting S3 server on %s", s.cfg.Server.Address)
+	slog.Info("starting S3 server", "address", s.cfg.Server.Address)
 
-	server := &http.Server{
+	s.httpServer = &http.Server{
 		Addr:              s.cfg.Server.Address,
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: ReadHeaderTimeout,
@@ -101,5 +104,11 @@ func (s *Server) ListenAndServe() error {
 		MaxHeaderBytes:    MaxHeaderBytes,
 	}
 
-	return server.ListenAndServe()
+	return s.httpServer.ListenAndServe()
+}
+
+// Shutdown gracefully shuts down the server without interrupting active connections
+func (s *Server) Shutdown(ctx context.Context) error {
+	slog.Info("shutting down server gracefully")
+	return s.httpServer.Shutdown(ctx)
 }

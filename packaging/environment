@@ -91,3 +91,13 @@ STUPID_RW_SECRET_KEY=your-secret-key-here
 # When set, X-Forwarded-For and X-Real-IP headers from these sources are trusted
 # Example: 127.0.0.1,10.0.0.0/8,192.168.1.0/24
 #STUPID_TRUSTED_PROXIES=
+
+# =============================================================================
+# Logging configuration
+# =============================================================================
+
+# Log output format: "text" or "json" (default: text)
+#STUPID_LOG_FORMAT=text
+
+# Log level: "debug", "info", "warn", "error" (default: info)
+#STUPID_LOG_LEVEL=info
