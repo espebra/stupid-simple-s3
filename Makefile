@@ -3,8 +3,12 @@
 BINARY_NAME=stupid-simple-s3
 BUILD_DIR=bin
 
+# Version from git tag (commit info comes from Go's built-in build info)
+VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "dev")
+LDFLAGS = -X github.com/espen/stupid-simple-s3/internal/version.Version=$(VERSION)
+
 build:
-	go build -mod=vendor -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/sss
+	go build -mod=vendor -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/sss
 
 run: build
 	./$(BUILD_DIR)/$(BINARY_NAME)
@@ -40,7 +44,7 @@ dev-dirs:
 
 # Build for multiple platforms
 build-all:
-	GOOS=linux GOARCH=amd64 go build -mod=vendor -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 ./cmd/sss
-	GOOS=linux GOARCH=arm64 go build -mod=vendor -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 ./cmd/sss
-	GOOS=darwin GOARCH=amd64 go build -mod=vendor -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 ./cmd/sss
-	GOOS=darwin GOARCH=arm64 go build -mod=vendor -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 ./cmd/sss
+	GOOS=linux GOARCH=amd64 go build -mod=vendor -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 ./cmd/sss
+	GOOS=linux GOARCH=arm64 go build -mod=vendor -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 ./cmd/sss
+	GOOS=darwin GOARCH=amd64 go build -mod=vendor -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 ./cmd/sss
+	GOOS=darwin GOARCH=arm64 go build -mod=vendor -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 ./cmd/sss

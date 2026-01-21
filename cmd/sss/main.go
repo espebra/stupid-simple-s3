@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -13,12 +15,21 @@ import (
 	"github.com/espen/stupid-simple-s3/internal/api"
 	"github.com/espen/stupid-simple-s3/internal/config"
 	"github.com/espen/stupid-simple-s3/internal/storage"
+	"github.com/espen/stupid-simple-s3/internal/version"
 )
 
 // ShutdownTimeout is the maximum time to wait for graceful shutdown
 const ShutdownTimeout = 120 * time.Second
 
 func main() {
+	showVersion := flag.Bool("version", false, "Print version information and exit")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version.String())
+		os.Exit(0)
+	}
+
 	// Load configuration from environment variables
 	cfg, err := config.Load()
 	if err != nil {
@@ -28,6 +39,8 @@ func main() {
 
 	// Configure structured logging
 	configureLogger(cfg.Log.Format, cfg.Log.Level)
+
+	slog.Info("starting stupid-simple-s3", "version", version.String())
 
 	cfg.LogConfiguration()
 
