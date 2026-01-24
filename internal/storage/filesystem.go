@@ -31,6 +31,21 @@ var ErrBucketAlreadyExists = errors.New("bucket already exists")
 // ErrBucketNotEmpty is returned when trying to delete a non-empty bucket
 var ErrBucketNotEmpty = errors.New("bucket not empty")
 
+// ErrObjectNotFound is returned when an object does not exist
+var ErrObjectNotFound = errors.New("object not found")
+
+// ErrEntityTooLarge is returned when an object or part exceeds size limits
+var ErrEntityTooLarge = errors.New("entity too large")
+
+// ErrUploadNotFound is returned when a multipart upload does not exist
+var ErrUploadNotFound = errors.New("upload not found")
+
+// ErrPartNotFound is returned when a multipart upload part does not exist
+var ErrPartNotFound = errors.New("part not found")
+
+// ErrInvalidPartOrder is returned when parts are not in ascending order
+var ErrInvalidPartOrder = errors.New("parts must be in ascending order")
+
 // ValidateKey checks that an object key is safe and doesn't contain path traversal sequences.
 // Returns an error if the key is invalid.
 func ValidateKey(key string) error {
