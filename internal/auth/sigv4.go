@@ -350,6 +350,12 @@ func (s *SignatureV4) ParsePresignedURL(r *http.Request) (*ParsedPresignedURL, e
 	if len(credParts) != 5 || credParts[4] != "aws4_request" {
 		return nil, fmt.Errorf("invalid credential format")
 	}
+	// Validate no empty parts in credential
+	for i, part := range credParts {
+		if part == "" {
+			return nil, fmt.Errorf("invalid credential format: empty component at position %d", i)
+		}
+	}
 
 	// Parse expires
 	expiresStr := query.Get("X-Amz-Expires")
