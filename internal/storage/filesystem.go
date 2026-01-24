@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -572,7 +573,7 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 		}
 
 		// Apply prefix filter
-		if opts.Prefix != "" && !hasPrefix(obj.Key, opts.Prefix) {
+		if opts.Prefix != "" && !strings.HasPrefix(obj.Key, opts.Prefix) {
 			continue
 		}
 
@@ -580,7 +581,7 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 		if opts.Delimiter != "" {
 			// Find delimiter after prefix
 			afterPrefix := obj.Key[len(opts.Prefix):]
-			delimIdx := indexOf(afterPrefix, opts.Delimiter)
+			delimIdx := strings.Index(afterPrefix, opts.Delimiter)
 			if delimIdx >= 0 {
 				// This is a common prefix
 				commonPrefix := opts.Prefix + afterPrefix[:delimIdx+len(opts.Delimiter)]
@@ -627,27 +628,7 @@ func (fs *FilesystemStorage) CopyObject(srcBucket, srcKey, dstBucket, dstKey str
 // Helper functions
 
 func sortObjectsByKey(objects []s3.ObjectMetadata) {
-	// Simple insertion sort for stability
-	for i := 1; i < len(objects); i++ {
-		key := objects[i]
-		j := i - 1
-		for j >= 0 && objects[j].Key > key.Key {
-			objects[j+1] = objects[j]
-			j--
-		}
-		objects[j+1] = key
-	}
-}
-
-func hasPrefix(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
-}
-
-func indexOf(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
+	sort.Slice(objects, func(i, j int) bool {
+		return objects[i].Key < objects[j].Key
+	})
 }
