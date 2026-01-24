@@ -596,7 +596,9 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 		// Check if we've reached the limit
 		if count >= opts.MaxKeys {
 			result.IsTruncated = true
-			result.NextContinuationToken = base64.URLEncoding.EncodeToString([]byte(result.Objects[len(result.Objects)-1].Key))
+			if len(result.Objects) > 0 {
+				result.NextContinuationToken = base64.URLEncoding.EncodeToString([]byte(result.Objects[len(result.Objects)-1].Key))
+			}
 			break
 		}
 
