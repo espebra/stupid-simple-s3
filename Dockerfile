@@ -1,5 +1,8 @@
 FROM golang:1.24-alpine AS builder
 
+ARG VERSION=dev
+ARG COMMIT
+
 WORKDIR /build
 
 # Copy dependency files first for better caching
@@ -11,7 +14,7 @@ COPY cmd/ cmd/
 COPY internal/ internal/
 
 # Build static binary
-RUN CGO_ENABLED=0 go build -mod=vendor -ldflags="-s -w" -o stupid-simple-s3 ./cmd/sss
+RUN CGO_ENABLED=0 go build -mod=vendor -ldflags="-s -w -X github.com/espen/stupid-simple-s3/internal/version.Version=${VERSION} -X github.com/espen/stupid-simple-s3/internal/version.Commit=${COMMIT}" -o stupid-simple-s3 ./cmd/sss
 
 # Create data directories
 RUN mkdir -p /var/lib/stupid-simple-s3/data /var/lib/stupid-simple-s3/tmp
