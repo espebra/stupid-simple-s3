@@ -68,7 +68,7 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 
 	// Check upload exists
 	if _, err := os.Stat(uploadPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("upload not found: %s", uploadID)
+		return nil, ErrUploadNotFound
 	}
 
 	// Write part to file
@@ -138,7 +138,7 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	// Validate parts are in order
 	for i := 1; i < len(parts); i++ {
 		if parts[i].PartNumber <= parts[i-1].PartNumber {
-			return nil, fmt.Errorf("parts not in ascending order")
+			return nil, ErrInvalidPartOrder
 		}
 	}
 
@@ -152,7 +152,7 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 
 		partMetaFile, err := os.Open(partMetaPath)
 		if err != nil {
-			return nil, fmt.Errorf("part %d not found", part.PartNumber)
+			return nil, fmt.Errorf("part %d: %w", part.PartNumber, ErrPartNotFound)
 		}
 
 		var partMeta s3.PartMetadata
@@ -268,7 +268,7 @@ func (fs *FilesystemStorage) AbortMultipartUpload(uploadID string) error {
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
 	if _, err := os.Stat(uploadPath); os.IsNotExist(err) {
-		return fmt.Errorf("upload not found: %s", uploadID)
+		return ErrUploadNotFound
 	}
 
 	if err := os.RemoveAll(uploadPath); err != nil {
@@ -286,7 +286,7 @@ func (fs *FilesystemStorage) GetMultipartUpload(uploadID string) (*s3.MultipartU
 	metaFile, err := os.Open(metaPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("upload not found: %s", uploadID)
+			return nil, ErrUploadNotFound
 		}
 		return nil, fmt.Errorf("opening upload metadata: %w", err)
 	}
@@ -307,7 +307,7 @@ func (fs *FilesystemStorage) ListParts(uploadID string) ([]s3.PartMetadata, erro
 	entries, err := os.ReadDir(uploadPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("upload not found: %s", uploadID)
+			return nil, ErrUploadNotFound
 		}
 		return nil, fmt.Errorf("reading upload directory: %w", err)
 	}

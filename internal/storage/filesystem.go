@@ -358,7 +358,7 @@ func (fs *FilesystemStorage) GetObject(bucket, key string) (io.ReadCloser, *s3.O
 	file, err := os.Open(dataPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil, fmt.Errorf("object not found: %s", key)
+			return nil, nil, ErrObjectNotFound
 		}
 		return nil, nil, fmt.Errorf("opening object data: %w", err)
 	}
@@ -377,7 +377,7 @@ func (fs *FilesystemStorage) HeadObject(bucket, key string) (*s3.ObjectMetadata,
 	metaFile, err := os.Open(metaPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("object not found: %s", key)
+			return nil, ErrObjectNotFound
 		}
 		return nil, fmt.Errorf("opening metadata file: %w", err)
 	}
@@ -458,7 +458,7 @@ func (fs *FilesystemStorage) GetObjectRange(bucket, key string, start, end int64
 	file, err := os.Open(dataPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil, fmt.Errorf("object not found: %s", key)
+			return nil, nil, ErrObjectNotFound
 		}
 		return nil, nil, fmt.Errorf("opening object data: %w", err)
 	}
