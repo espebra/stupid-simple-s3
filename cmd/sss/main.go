@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -52,13 +53,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Count existing buckets for metrics
+	bucketsPath := filepath.Join(cfg.Storage.Path, "buckets")
+	if entries, err := os.ReadDir(bucketsPath); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				metrics.BucketsTotal.Inc()
+			}
+		}
+		slog.Info("found existing buckets", "count", len(entries))
+	}
+
 	// Auto-create bucket at startup if configured
 	if cfg.Bucket.Name != "" {
 		err := store.CreateBucket(cfg.Bucket.Name)
 		if err != nil {
 			if err == storage.ErrBucketAlreadyExists {
 				slog.Info("bucket already exists", "bucket", cfg.Bucket.Name)
-				metrics.BucketsTotal.Inc()
+				// Already counted above, don't increment again
 			} else {
 				slog.Error("failed to create bucket", "bucket", cfg.Bucket.Name, "error", err)
 				os.Exit(1)

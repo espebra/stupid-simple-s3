@@ -10,7 +10,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/espen/stupid-simple-s3/internal/s3"
@@ -30,6 +32,21 @@ var ErrBucketAlreadyExists = errors.New("bucket already exists")
 
 // ErrBucketNotEmpty is returned when trying to delete a non-empty bucket
 var ErrBucketNotEmpty = errors.New("bucket not empty")
+
+// ErrObjectNotFound is returned when an object does not exist
+var ErrObjectNotFound = errors.New("object not found")
+
+// ErrEntityTooLarge is returned when an object or part exceeds size limits
+var ErrEntityTooLarge = errors.New("entity too large")
+
+// ErrUploadNotFound is returned when a multipart upload does not exist
+var ErrUploadNotFound = errors.New("upload not found")
+
+// ErrPartNotFound is returned when a multipart upload part does not exist
+var ErrPartNotFound = errors.New("part not found")
+
+// ErrInvalidPartOrder is returned when parts are not in ascending order
+var ErrInvalidPartOrder = errors.New("parts must be in ascending order")
 
 // ValidateKey checks that an object key is safe and doesn't contain path traversal sequences.
 // Returns an error if the key is invalid.
@@ -104,6 +121,9 @@ func ValidateBucketName(name string) error {
 type FilesystemStorage struct {
 	basePath      string
 	multipartPath string
+	// uploadMu protects multipart upload operations to prevent race conditions
+	// between concurrent uploads, aborts, and cleanup operations
+	uploadMu sync.RWMutex
 }
 
 // NewFilesystemStorage creates a new filesystem-backed storage
@@ -269,6 +289,20 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 		return nil, fmt.Errorf("creating object directory: %w", err)
 	}
 
+	// Defense in depth: verify created directory is within base path (catches symlink attacks)
+	realObjPath, err := filepath.EvalSymlinks(objPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolving object path: %w", err)
+	}
+	absBase, _ := filepath.Abs(fs.basePath)
+	if realBase, err := filepath.EvalSymlinks(absBase); err == nil {
+		absBase = realBase
+	}
+	if !strings.HasPrefix(realObjPath, absBase+string(filepath.Separator)) {
+		os.RemoveAll(objPath) // Clean up potentially dangerous directory
+		return nil, fmt.Errorf("%w: path escapes base directory via symlink", ErrInvalidKey)
+	}
+
 	// Write data to a temp file first, then rename
 	tmpPath := dataPath + ".tmp"
 	tmpFile, err := os.Create(tmpPath)
@@ -343,7 +377,7 @@ func (fs *FilesystemStorage) GetObject(bucket, key string) (io.ReadCloser, *s3.O
 	file, err := os.Open(dataPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil, fmt.Errorf("object not found: %s", key)
+			return nil, nil, ErrObjectNotFound
 		}
 		return nil, nil, fmt.Errorf("opening object data: %w", err)
 	}
@@ -362,7 +396,7 @@ func (fs *FilesystemStorage) HeadObject(bucket, key string) (*s3.ObjectMetadata,
 	metaFile, err := os.Open(metaPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("object not found: %s", key)
+			return nil, ErrObjectNotFound
 		}
 		return nil, fmt.Errorf("opening metadata file: %w", err)
 	}
@@ -443,7 +477,7 @@ func (fs *FilesystemStorage) GetObjectRange(bucket, key string, start, end int64
 	file, err := os.Open(dataPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil, fmt.Errorf("object not found: %s", key)
+			return nil, nil, ErrObjectNotFound
 		}
 		return nil, nil, fmt.Errorf("opening object data: %w", err)
 	}
@@ -553,7 +587,7 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 		}
 
 		// Apply prefix filter
-		if opts.Prefix != "" && !hasPrefix(obj.Key, opts.Prefix) {
+		if opts.Prefix != "" && !strings.HasPrefix(obj.Key, opts.Prefix) {
 			continue
 		}
 
@@ -561,7 +595,7 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 		if opts.Delimiter != "" {
 			// Find delimiter after prefix
 			afterPrefix := obj.Key[len(opts.Prefix):]
-			delimIdx := indexOf(afterPrefix, opts.Delimiter)
+			delimIdx := strings.Index(afterPrefix, opts.Delimiter)
 			if delimIdx >= 0 {
 				// This is a common prefix
 				commonPrefix := opts.Prefix + afterPrefix[:delimIdx+len(opts.Delimiter)]
@@ -576,7 +610,9 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 		// Check if we've reached the limit
 		if count >= opts.MaxKeys {
 			result.IsTruncated = true
-			result.NextContinuationToken = base64.URLEncoding.EncodeToString([]byte(result.Objects[len(result.Objects)-1].Key))
+			if len(result.Objects) > 0 {
+				result.NextContinuationToken = base64.URLEncoding.EncodeToString([]byte(result.Objects[len(result.Objects)-1].Key))
+			}
 			break
 		}
 
@@ -608,27 +644,7 @@ func (fs *FilesystemStorage) CopyObject(srcBucket, srcKey, dstBucket, dstKey str
 // Helper functions
 
 func sortObjectsByKey(objects []s3.ObjectMetadata) {
-	// Simple insertion sort for stability
-	for i := 1; i < len(objects); i++ {
-		key := objects[i]
-		j := i - 1
-		for j >= 0 && objects[j].Key > key.Key {
-			objects[j+1] = objects[j]
-			j--
-		}
-		objects[j+1] = key
-	}
-}
-
-func hasPrefix(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
-}
-
-func indexOf(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
+	sort.Slice(objects, func(i, j int) bool {
+		return objects[i].Key < objects[j].Key
+	})
 }

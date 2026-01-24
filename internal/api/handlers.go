@@ -24,19 +24,46 @@ const maxKeysLimit = 1000
 // ErrInvalidMetadata is returned when metadata contains invalid characters
 var ErrInvalidMetadata = errors.New("invalid metadata")
 
+// drainRequestBody discards remaining request body to prevent connection hangs.
+// Should be called on error paths where the body may not have been fully consumed.
+func drainRequestBody(r *http.Request) {
+	if r.Body != nil {
+		_, _ = io.Copy(io.Discard, r.Body)
+	}
+}
+
+// isASCIIPrintable checks if a byte is ASCII printable (space through tilde)
+func isASCIIPrintable(c byte) bool {
+	return c >= 0x20 && c <= 0x7E
+}
+
 // validateMetadataValue checks that a metadata value doesn't contain characters
 // that could be used for header injection attacks (CRLF injection).
+// Values must be ASCII printable characters only.
 func validateMetadataValue(value string) error {
-	if strings.ContainsAny(value, "\r\n\x00") {
-		return ErrInvalidMetadata
+	for i := 0; i < len(value); i++ {
+		if !isASCIIPrintable(value[i]) {
+			return ErrInvalidMetadata
+		}
 	}
 	return nil
 }
 
 // validateMetadataKey checks that a metadata key is valid.
+// Keys must be ASCII printable characters only (lowercase letters, numbers, hyphens).
 func validateMetadataKey(key string) error {
-	if strings.ContainsAny(key, "\r\n\x00") {
+	if key == "" {
 		return ErrInvalidMetadata
+	}
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		// Allow lowercase letters, numbers, and hyphens (already lowercased by caller)
+		isLower := c >= 'a' && c <= 'z'
+		isDigit := c >= '0' && c <= '9'
+		isHyphen := c == '-'
+		if !isLower && !isDigit && !isHyphen {
+			return ErrInvalidMetadata
+		}
 	}
 	return nil
 }
@@ -78,7 +105,7 @@ func (l *limitedReader) Read(p []byte) (n int, err error) {
 		var buf [1]byte
 		n, err := l.r.Read(buf[:])
 		if n > 0 {
-			return 0, errors.New("entity too large")
+			return 0, storage.ErrEntityTooLarge
 		}
 		return 0, err
 	}
@@ -234,11 +261,12 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 
 	meta, err := h.storage.PutObject(bucket, key, contentType, userMetadata, body)
 	if err != nil {
-		if strings.Contains(err.Error(), "entity too large") {
+		drainRequestBody(r)
+		if errors.Is(err, storage.ErrEntityTooLarge) {
 			s3.WriteErrorResponse(w, s3.ErrEntityTooLarge)
 			return
 		}
-		if strings.Contains(err.Error(), "invalid object key") {
+		if errors.Is(err, storage.ErrInvalidKey) {
 			s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
 			return
 		}
@@ -285,7 +313,7 @@ func (h *Handlers) CopyObject(w http.ResponseWriter, r *http.Request) {
 	// Copy the object
 	meta, err := h.storage.CopyObject(srcBucket, srcKey, dstBucket, dstKey)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, storage.ErrObjectNotFound) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
 			return
 		}
@@ -333,7 +361,7 @@ func (h *Handlers) GetObject(w http.ResponseWriter, r *http.Request) {
 
 	reader, meta, err := h.storage.GetObject(bucket, key)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, storage.ErrObjectNotFound) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
 			return
 		}
@@ -383,7 +411,7 @@ func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
 	// Get object metadata first to validate range
 	meta, err := h.storage.HeadObject(bucket, key)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, storage.ErrObjectNotFound) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
 			return
 		}
@@ -556,7 +584,7 @@ func (h *Handlers) HeadObject(w http.ResponseWriter, r *http.Request) {
 
 	meta, err := h.storage.HeadObject(bucket, key)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, storage.ErrObjectNotFound) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
 			return
 		}
@@ -635,7 +663,7 @@ func (h *Handlers) CreateMultipartUpload(w http.ResponseWriter, r *http.Request)
 
 	uploadID, err := h.storage.CreateMultipartUpload(bucket, key, contentType, userMetadata)
 	if err != nil {
-		if strings.Contains(err.Error(), "invalid object key") {
+		if errors.Is(err, storage.ErrInvalidKey) {
 			s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
 			return
 		}
@@ -706,8 +734,13 @@ func (h *Handlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 
 	partMeta, err := h.storage.UploadPart(uploadID, partNumber, body)
 	if err != nil {
-		if strings.Contains(err.Error(), "entity too large") {
+		drainRequestBody(r)
+		if errors.Is(err, storage.ErrEntityTooLarge) {
 			s3.WriteErrorResponse(w, s3.ErrEntityTooLarge)
+			return
+		}
+		if errors.Is(err, storage.ErrUploadNotFound) {
+			s3.WriteErrorResponse(w, s3.ErrNoSuchUpload)
 			return
 		}
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
@@ -761,12 +794,16 @@ func (h *Handlers) CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 	// Complete the upload
 	objMeta, err := h.storage.CompleteMultipartUpload(uploadID, completeReq.Parts)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, storage.ErrPartNotFound) {
 			s3.WriteErrorResponse(w, s3.ErrInvalidPart)
 			return
 		}
-		if strings.Contains(err.Error(), "order") {
+		if errors.Is(err, storage.ErrInvalidPartOrder) {
 			s3.WriteErrorResponse(w, s3.ErrInvalidPartOrder)
+			return
+		}
+		if errors.Is(err, storage.ErrUploadNotFound) {
+			s3.WriteErrorResponse(w, s3.ErrNoSuchUpload)
 			return
 		}
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
