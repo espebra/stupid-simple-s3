@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/espen/stupid-simple-s3/internal/s3"
@@ -119,6 +120,9 @@ func ValidateBucketName(name string) error {
 type FilesystemStorage struct {
 	basePath      string
 	multipartPath string
+	// uploadMu protects multipart upload operations to prevent race conditions
+	// between concurrent uploads, aborts, and cleanup operations
+	uploadMu sync.RWMutex
 }
 
 // NewFilesystemStorage creates a new filesystem-backed storage

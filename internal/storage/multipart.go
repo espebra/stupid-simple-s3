@@ -64,6 +64,10 @@ func (fs *FilesystemStorage) CreateMultipartUpload(bucket, key string, contentTy
 
 // UploadPart stores a part of a multipart upload
 func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io.Reader) (*s3.PartMetadata, error) {
+	// Use read lock to allow concurrent part uploads while preventing deletion
+	fs.uploadMu.RLock()
+	defer fs.uploadMu.RUnlock()
+
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
 	// Check upload exists
@@ -127,10 +131,14 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 
 // CompleteMultipartUpload assembles all parts into the final object
 func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3.CompletedPartInput) (*s3.ObjectMetadata, error) {
+	// Use exclusive lock to prevent concurrent modifications during completion
+	fs.uploadMu.Lock()
+	defer fs.uploadMu.Unlock()
+
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
-	// Get upload metadata
-	uploadMeta, err := fs.GetMultipartUpload(uploadID)
+	// Get upload metadata (internal call, lock already held)
+	uploadMeta, err := fs.getMultipartUploadInternal(uploadID)
 	if err != nil {
 		return nil, err
 	}
@@ -265,6 +273,10 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 
 // AbortMultipartUpload cancels a multipart upload and cleans up parts
 func (fs *FilesystemStorage) AbortMultipartUpload(uploadID string) error {
+	// Use exclusive lock to prevent concurrent access during deletion
+	fs.uploadMu.Lock()
+	defer fs.uploadMu.Unlock()
+
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
 	if _, err := os.Stat(uploadPath); os.IsNotExist(err) {
@@ -280,6 +292,13 @@ func (fs *FilesystemStorage) AbortMultipartUpload(uploadID string) error {
 
 // GetMultipartUpload retrieves metadata about a multipart upload
 func (fs *FilesystemStorage) GetMultipartUpload(uploadID string) (*s3.MultipartUploadMetadata, error) {
+	fs.uploadMu.RLock()
+	defer fs.uploadMu.RUnlock()
+	return fs.getMultipartUploadInternal(uploadID)
+}
+
+// getMultipartUploadInternal retrieves metadata without acquiring lock (caller must hold lock)
+func (fs *FilesystemStorage) getMultipartUploadInternal(uploadID string) (*s3.MultipartUploadMetadata, error) {
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 	metaPath := filepath.Join(uploadPath, "meta.json")
 
@@ -302,6 +321,9 @@ func (fs *FilesystemStorage) GetMultipartUpload(uploadID string) (*s3.MultipartU
 
 // ListParts returns the parts uploaded for a multipart upload
 func (fs *FilesystemStorage) ListParts(uploadID string) ([]s3.PartMetadata, error) {
+	fs.uploadMu.RLock()
+	defer fs.uploadMu.RUnlock()
+
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
 	entries, err := os.ReadDir(uploadPath)
@@ -358,6 +380,7 @@ func (fs *FilesystemStorage) ListParts(uploadID string) ([]s3.PartMetadata, erro
 // CleanupStaleUploads removes multipart uploads older than maxAge
 // Returns the number of uploads cleaned up
 func (fs *FilesystemStorage) CleanupStaleUploads(maxAge time.Duration) (int, error) {
+	// Read directory listing without lock (just reading names)
 	entries, err := os.ReadDir(fs.multipartPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -375,28 +398,48 @@ func (fs *FilesystemStorage) CleanupStaleUploads(maxAge time.Duration) (int, err
 		}
 
 		uploadID := entry.Name()
-		uploadMeta, err := fs.GetMultipartUpload(uploadID)
-		if err != nil {
-			// If we can't read metadata, check directory modification time
-			info, statErr := entry.Info()
-			if statErr != nil {
-				continue
-			}
-			if info.ModTime().Before(cutoff) {
-				uploadPath := filepath.Join(fs.multipartPath, uploadID)
-				if removeErr := os.RemoveAll(uploadPath); removeErr == nil {
-					cleaned++
-				}
-			}
-			continue
-		}
 
-		if uploadMeta.Created.Before(cutoff) {
-			if abortErr := fs.AbortMultipartUpload(uploadID); abortErr == nil {
-				cleaned++
-			}
+		// Check and remove with lock held to prevent races
+		if fs.cleanupUploadIfStale(uploadID, cutoff, entry) {
+			cleaned++
 		}
 	}
 
 	return cleaned, nil
+}
+
+// cleanupUploadIfStale checks if an upload is stale and removes it atomically
+func (fs *FilesystemStorage) cleanupUploadIfStale(uploadID string, cutoff time.Time, entry os.DirEntry) bool {
+	fs.uploadMu.Lock()
+	defer fs.uploadMu.Unlock()
+
+	uploadPath := filepath.Join(fs.multipartPath, uploadID)
+
+	// Check if still exists (might have been completed/aborted)
+	if _, err := os.Stat(uploadPath); os.IsNotExist(err) {
+		return false
+	}
+
+	uploadMeta, err := fs.getMultipartUploadInternal(uploadID)
+	if err != nil {
+		// If we can't read metadata, check directory modification time
+		info, statErr := entry.Info()
+		if statErr != nil {
+			return false
+		}
+		if info.ModTime().Before(cutoff) {
+			if removeErr := os.RemoveAll(uploadPath); removeErr == nil {
+				return true
+			}
+		}
+		return false
+	}
+
+	if uploadMeta.Created.Before(cutoff) {
+		if removeErr := os.RemoveAll(uploadPath); removeErr == nil {
+			return true
+		}
+	}
+
+	return false
 }
