@@ -104,10 +104,72 @@ func NewHandlers(cfg *config.Config, store storage.MultipartStorage) *Handlers {
 	}
 }
 
+// validateBucketExists checks if the bucket exists
+func (h *Handlers) validateBucketExists(bucket string) error {
+	exists, err := h.storage.BucketExists(bucket)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return storage.ErrBucketNotFound
+	}
+	return nil
+}
+
+// CreateBucket handles PUT /{bucket}
+func (h *Handlers) CreateBucket(w http.ResponseWriter, r *http.Request) {
+	bucket := r.PathValue("bucket")
+
+	err := h.storage.CreateBucket(bucket)
+	if err != nil {
+		if errors.Is(err, storage.ErrBucketAlreadyExists) {
+			s3.WriteErrorResponse(w, s3.ErrBucketAlreadyOwnedByYou)
+			return
+		}
+		if errors.Is(err, storage.ErrInvalidBucketName) {
+			s3.WriteErrorResponse(w, s3.ErrInvalidBucketName)
+			return
+		}
+		s3.WriteErrorResponse(w, s3.ErrInternalError)
+		return
+	}
+
+	metrics.BucketCreationsTotal.Inc()
+	metrics.BucketsTotal.Inc()
+	w.WriteHeader(http.StatusOK)
+}
+
+// DeleteBucket handles DELETE /{bucket}
+func (h *Handlers) DeleteBucket(w http.ResponseWriter, r *http.Request) {
+	bucket := r.PathValue("bucket")
+
+	err := h.storage.DeleteBucket(bucket)
+	if err != nil {
+		if errors.Is(err, storage.ErrBucketNotFound) {
+			s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
+			return
+		}
+		if errors.Is(err, storage.ErrBucketNotEmpty) {
+			s3.WriteErrorResponse(w, s3.ErrBucketNotEmpty)
+			return
+		}
+		if errors.Is(err, storage.ErrInvalidBucketName) {
+			s3.WriteErrorResponse(w, s3.ErrInvalidBucketName)
+			return
+		}
+		s3.WriteErrorResponse(w, s3.ErrInternalError)
+		return
+	}
+
+	metrics.BucketDeletionsTotal.Inc()
+	metrics.BucketsTotal.Dec()
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // HeadBucket handles HEAD /{bucket}
 func (h *Handlers) HeadBucket(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
-	if bucket != h.cfg.Bucket.Name {
+	if err := h.validateBucketExists(bucket); err != nil {
 		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
@@ -119,7 +181,14 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
 
-	if bucket != h.cfg.Bucket.Name {
+	// Handle trailing slash on bucket (some SDKs like Minio send PUT /bucket/)
+	// This should be treated as CreateBucket, not PutObject
+	if key == "" {
+		h.CreateBucket(w, r)
+		return
+	}
+
+	if err := h.validateBucketExists(bucket); err != nil {
 		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
@@ -163,7 +232,7 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 		body = newLimitedReader(body, h.cfg.Limits.MaxObjectSize)
 	}
 
-	meta, err := h.storage.PutObject(key, contentType, userMetadata, body)
+	meta, err := h.storage.PutObject(bucket, key, contentType, userMetadata, body)
 	if err != nil {
 		if strings.Contains(err.Error(), "entity too large") {
 			s3.WriteErrorResponse(w, s3.ErrEntityTooLarge)
@@ -186,8 +255,8 @@ func (h *Handlers) CopyObject(w http.ResponseWriter, r *http.Request) {
 	dstBucket := r.PathValue("bucket")
 	dstKey := r.PathValue("key")
 
-	// Validate destination bucket
-	if dstBucket != h.cfg.Bucket.Name {
+	// Validate destination bucket (already validated in PutObject, but verify again for safety)
+	if err := h.validateBucketExists(dstBucket); err != nil {
 		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
@@ -207,14 +276,14 @@ func (h *Handlers) CopyObject(w http.ResponseWriter, r *http.Request) {
 	srcBucket := parts[0]
 	srcKey := parts[1]
 
-	// Only support copying within the same bucket
-	if srcBucket != h.cfg.Bucket.Name {
+	// Validate source bucket exists
+	if err := h.validateBucketExists(srcBucket); err != nil {
 		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
 
 	// Copy the object
-	meta, err := h.storage.CopyObject(srcKey, dstKey)
+	meta, err := h.storage.CopyObject(srcBucket, srcKey, dstBucket, dstKey)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
@@ -239,7 +308,14 @@ func (h *Handlers) GetObject(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
 
-	if bucket != h.cfg.Bucket.Name {
+	// Handle trailing slash on bucket (some SDKs send GET /bucket/)
+	// This should be treated as GetBucket (list objects), not GetObject
+	if key == "" {
+		h.GetBucket(w, r)
+		return
+	}
+
+	if err := h.validateBucketExists(bucket); err != nil {
 		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
@@ -255,7 +331,7 @@ func (h *Handlers) GetObject(w http.ResponseWriter, r *http.Request) {
 	metrics.DownloadsActive.Inc()
 	defer metrics.DownloadsActive.Dec()
 
-	reader, meta, err := h.storage.GetObject(key)
+	reader, meta, err := h.storage.GetObject(bucket, key)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
@@ -292,7 +368,7 @@ func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
 	defer metrics.DownloadsActive.Dec()
 
 	// Note: bucket validation is done in GetObject before calling this handler
-	_ = r.PathValue("bucket")
+	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
 
 	rangeHeader := r.Header.Get("Range")
@@ -305,7 +381,7 @@ func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get object metadata first to validate range
-	meta, err := h.storage.HeadObject(key)
+	meta, err := h.storage.HeadObject(bucket, key)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
@@ -336,7 +412,7 @@ func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reader, _, err := h.storage.GetObjectRange(key, start, end)
+	reader, _, err := h.storage.GetObjectRange(bucket, key, start, end)
 	if err != nil {
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
@@ -466,12 +542,19 @@ func (h *Handlers) HeadObject(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
 
-	if bucket != h.cfg.Bucket.Name {
+	// Handle trailing slash on bucket (some SDKs send HEAD /bucket/)
+	// This should be treated as HeadBucket, not HeadObject
+	if key == "" {
+		h.HeadBucket(w, r)
+		return
+	}
+
+	if err := h.validateBucketExists(bucket); err != nil {
 		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
 
-	meta, err := h.storage.HeadObject(key)
+	meta, err := h.storage.HeadObject(bucket, key)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
@@ -500,7 +583,14 @@ func (h *Handlers) DeleteObject(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
 
-	if bucket != h.cfg.Bucket.Name {
+	// Handle trailing slash on bucket (some SDKs send DELETE /bucket/)
+	// This should be treated as DeleteBucket, not DeleteObject
+	if key == "" {
+		h.DeleteBucket(w, r)
+		return
+	}
+
+	if err := h.validateBucketExists(bucket); err != nil {
 		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
@@ -512,7 +602,7 @@ func (h *Handlers) DeleteObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := h.storage.DeleteObject(key)
+	err := h.storage.DeleteObject(bucket, key)
 	if err != nil {
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
@@ -526,7 +616,7 @@ func (h *Handlers) CreateMultipartUpload(w http.ResponseWriter, r *http.Request)
 	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
 
-	if bucket != h.cfg.Bucket.Name {
+	if err := h.validateBucketExists(bucket); err != nil {
 		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
@@ -543,7 +633,7 @@ func (h *Handlers) CreateMultipartUpload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	uploadID, err := h.storage.CreateMultipartUpload(key, contentType, userMetadata)
+	uploadID, err := h.storage.CreateMultipartUpload(bucket, key, contentType, userMetadata)
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid object key") {
 			s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
@@ -570,7 +660,7 @@ func (h *Handlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
 
-	if bucket != h.cfg.Bucket.Name {
+	if err := h.validateBucketExists(bucket); err != nil {
 		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
@@ -633,7 +723,7 @@ func (h *Handlers) CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
 
-	if bucket != h.cfg.Bucket.Name {
+	if err := h.validateBucketExists(bucket); err != nil {
 		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
@@ -702,7 +792,7 @@ func (h *Handlers) AbortMultipartUpload(w http.ResponseWriter, r *http.Request) 
 	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
 
-	if bucket != h.cfg.Bucket.Name {
+	if err := h.validateBucketExists(bucket); err != nil {
 		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
@@ -738,6 +828,15 @@ func (h *Handlers) AbortMultipartUpload(w http.ResponseWriter, r *http.Request) 
 // PostObject handles POST requests to /{bucket}/{key...}
 // Routes to either CreateMultipartUpload or CompleteMultipartUpload
 func (h *Handlers) PostObject(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+
+	// Handle trailing slash on bucket (some SDKs send POST /bucket/)
+	// This should be treated as PostBucket, not PostObject
+	if key == "" {
+		h.PostBucket(w, r)
+		return
+	}
+
 	query := r.URL.Query()
 
 	if query.Has("uploads") {
@@ -757,7 +856,7 @@ func (h *Handlers) PostObject(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) GetBucket(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 
-	if bucket != h.cfg.Bucket.Name {
+	if err := h.validateBucketExists(bucket); err != nil {
 		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
@@ -798,7 +897,7 @@ func (h *Handlers) ListObjectsV2(w http.ResponseWriter, r *http.Request) {
 		ContinuationToken: query.Get("continuation-token"),
 	}
 
-	result, err := h.storage.ListObjects(opts)
+	result, err := h.storage.ListObjects(bucket, opts)
 	if err != nil {
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
@@ -845,7 +944,7 @@ func (h *Handlers) ListObjectsV2(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) PostBucket(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 
-	if bucket != h.cfg.Bucket.Name {
+	if err := h.validateBucketExists(bucket); err != nil {
 		s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 		return
 	}
@@ -863,7 +962,7 @@ func (h *Handlers) PostBucket(w http.ResponseWriter, r *http.Request) {
 // DeleteObjects handles POST /{bucket}?delete (batch delete)
 func (h *Handlers) DeleteObjects(w http.ResponseWriter, r *http.Request) {
 	// Note: bucket validation is done in PostBucket before calling this handler
-	_ = r.PathValue("bucket")
+	bucket := r.PathValue("bucket")
 
 	// Parse request body with size limit to prevent XML bomb attacks
 	// Limit to 1MB which is more than enough for batch delete requests
@@ -880,7 +979,7 @@ func (h *Handlers) DeleteObjects(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, obj := range deleteReq.Objects {
-		err := h.storage.DeleteObject(obj.Key)
+		err := h.storage.DeleteObject(bucket, obj.Key)
 		if err != nil {
 			result.Error = append(result.Error, s3.DeleteError{
 				Key:     obj.Key,

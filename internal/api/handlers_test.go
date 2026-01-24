@@ -18,7 +18,7 @@ import (
 )
 
 // Since auth testing is complex, we'll test handlers without auth middleware
-func setupTestHandlers(t *testing.T) (*Handlers, *config.Config, func()) {
+func setupTestHandlers(t *testing.T) (*Handlers, storage.MultipartStorage, func()) {
 	t.Helper()
 
 	tmpDir, err := os.MkdirTemp("", "sss-handlers-test-*")
@@ -40,13 +40,152 @@ func setupTestHandlers(t *testing.T) (*Handlers, *config.Config, func()) {
 		t.Fatalf("failed to create storage: %v", err)
 	}
 
+	// Create the test bucket
+	if err := store.CreateBucket("test-bucket"); err != nil {
+		os.RemoveAll(tmpDir)
+		t.Fatalf("failed to create test bucket: %v", err)
+	}
+
 	handlers := NewHandlers(cfg, store)
 
 	cleanup := func() {
 		os.RemoveAll(tmpDir)
 	}
 
-	return handlers, cfg, cleanup
+	return handlers, store, cleanup
+}
+
+func TestCreateBucket(t *testing.T) {
+	handlers, _, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	t.Run("create new bucket", func(t *testing.T) {
+		req := httptest.NewRequest("PUT", "/new-bucket", nil)
+		req.SetPathValue("bucket", "new-bucket")
+		w := httptest.NewRecorder()
+
+		handlers.CreateBucket(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+	})
+
+	t.Run("create existing bucket returns conflict", func(t *testing.T) {
+		// test-bucket was already created in setupTestHandlers
+		req := httptest.NewRequest("PUT", "/test-bucket", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		w := httptest.NewRecorder()
+
+		handlers.CreateBucket(w, req)
+
+		if w.Code != http.StatusConflict {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusConflict)
+		}
+
+		var errResp s3.Error
+		_ = xml.NewDecoder(w.Body).Decode(&errResp)
+		if errResp.Code != s3.ErrBucketAlreadyOwnedByYou {
+			t.Errorf("error code = %q, want %q", errResp.Code, s3.ErrBucketAlreadyOwnedByYou)
+		}
+	})
+
+	t.Run("create bucket with invalid name", func(t *testing.T) {
+		req := httptest.NewRequest("PUT", "/INVALID", nil)
+		req.SetPathValue("bucket", "INVALID")
+		w := httptest.NewRecorder()
+
+		handlers.CreateBucket(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+		}
+	})
+}
+
+func TestDeleteBucket(t *testing.T) {
+	handlers, store, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	t.Run("delete empty bucket", func(t *testing.T) {
+		// Create a new bucket
+		if err := store.CreateBucket("deleteme"); err != nil {
+			t.Fatalf("CreateBucket failed: %v", err)
+		}
+
+		req := httptest.NewRequest("DELETE", "/deleteme", nil)
+		req.SetPathValue("bucket", "deleteme")
+		w := httptest.NewRecorder()
+
+		handlers.DeleteBucket(w, req)
+
+		if w.Code != http.StatusNoContent {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusNoContent)
+		}
+
+		// Verify bucket is gone
+		exists, _ := store.BucketExists("deleteme")
+		if exists {
+			t.Error("bucket should not exist after deletion")
+		}
+	})
+
+	t.Run("delete non-empty bucket returns conflict", func(t *testing.T) {
+		// Create a bucket with an object
+		if err := store.CreateBucket("nonempty"); err != nil {
+			t.Fatalf("CreateBucket failed: %v", err)
+		}
+		_, err := store.PutObject("nonempty", "test-key", "text/plain", nil, strings.NewReader("content"))
+		if err != nil {
+			t.Fatalf("PutObject failed: %v", err)
+		}
+
+		req := httptest.NewRequest("DELETE", "/nonempty", nil)
+		req.SetPathValue("bucket", "nonempty")
+		w := httptest.NewRecorder()
+
+		handlers.DeleteBucket(w, req)
+
+		if w.Code != http.StatusConflict {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusConflict)
+		}
+
+		var errResp s3.Error
+		_ = xml.NewDecoder(w.Body).Decode(&errResp)
+		if errResp.Code != s3.ErrBucketNotEmpty {
+			t.Errorf("error code = %q, want %q", errResp.Code, s3.ErrBucketNotEmpty)
+		}
+	})
+
+	t.Run("delete non-existent bucket returns not found", func(t *testing.T) {
+		req := httptest.NewRequest("DELETE", "/nonexistent", nil)
+		req.SetPathValue("bucket", "nonexistent")
+		w := httptest.NewRecorder()
+
+		handlers.DeleteBucket(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+		}
+
+		var errResp s3.Error
+		_ = xml.NewDecoder(w.Body).Decode(&errResp)
+		if errResp.Code != s3.ErrNoSuchBucket {
+			t.Errorf("error code = %q, want %q", errResp.Code, s3.ErrNoSuchBucket)
+		}
+	})
+
+	t.Run("delete bucket with invalid name", func(t *testing.T) {
+		req := httptest.NewRequest("DELETE", "/INVALID", nil)
+		req.SetPathValue("bucket", "INVALID")
+		w := httptest.NewRecorder()
+
+		handlers.DeleteBucket(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+		}
+	})
 }
 
 func TestHeadBucket(t *testing.T) {
@@ -1608,6 +1747,11 @@ func TestUploadSizeLimits(t *testing.T) {
 	store, err := storage.NewFilesystemStorage(cfg.Storage.Path, cfg.Storage.MultipartPath)
 	if err != nil {
 		t.Fatalf("failed to create storage: %v", err)
+	}
+
+	// Create the test bucket
+	if err := store.CreateBucket("test-bucket"); err != nil {
+		t.Fatalf("failed to create test bucket: %v", err)
 	}
 
 	handlers := NewHandlers(cfg, store)

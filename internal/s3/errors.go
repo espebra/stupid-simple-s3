@@ -9,6 +9,7 @@ type ErrorCode string
 
 const (
 	ErrAccessDenied                 ErrorCode = "AccessDenied"
+	ErrBucketAlreadyOwnedByYou      ErrorCode = "BucketAlreadyOwnedByYou"
 	ErrBucketNotEmpty               ErrorCode = "BucketNotEmpty"
 	ErrInternalError                ErrorCode = "InternalError"
 	ErrInvalidAccessKeyId           ErrorCode = "InvalidAccessKeyId"
@@ -35,6 +36,7 @@ const (
 
 var errorStatusCodes = map[ErrorCode]int{
 	ErrAccessDenied:                 http.StatusForbidden,
+	ErrBucketAlreadyOwnedByYou:      http.StatusConflict,
 	ErrBucketNotEmpty:               http.StatusConflict,
 	ErrInternalError:                http.StatusInternalServerError,
 	ErrInvalidAccessKeyId:           http.StatusForbidden,
@@ -61,6 +63,7 @@ var errorStatusCodes = map[ErrorCode]int{
 
 var errorMessages = map[ErrorCode]string{
 	ErrAccessDenied:                 "Access Denied",
+	ErrBucketAlreadyOwnedByYou:      "Your previous request to create the named bucket succeeded and you already own it.",
 	ErrBucketNotEmpty:               "The bucket you tried to delete is not empty",
 	ErrInternalError:                "We encountered an internal error. Please try again.",
 	ErrInvalidAccessKeyId:           "The AWS Access Key Id you provided does not exist in our records.",

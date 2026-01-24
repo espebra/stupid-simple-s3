@@ -92,6 +92,30 @@ var (
 		},
 		[]string{"reason"},
 	)
+
+	// BucketsTotal tracks the current number of buckets
+	BucketsTotal = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "stupid_simple_s3_buckets_total",
+			Help: "Current number of buckets",
+		},
+	)
+
+	// BucketCreationsTotal counts total bucket creations
+	BucketCreationsTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "stupid_simple_s3_bucket_creations_total",
+			Help: "Total number of bucket creations",
+		},
+	)
+
+	// BucketDeletionsTotal counts total bucket deletions
+	BucketDeletionsTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "stupid_simple_s3_bucket_deletions_total",
+			Help: "Total number of bucket deletions",
+		},
+	)
 )
 
 // Operation names for consistent labeling
@@ -100,6 +124,8 @@ const (
 	OpGetObject               = "GetObject"
 	OpHeadObject              = "HeadObject"
 	OpDeleteObject            = "DeleteObject"
+	OpCreateBucket            = "CreateBucket"
+	OpDeleteBucket            = "DeleteBucket"
 	OpHeadBucket              = "HeadBucket"
 	OpCreateMultipartUpload   = "CreateMultipartUpload"
 	OpUploadPart              = "UploadPart"

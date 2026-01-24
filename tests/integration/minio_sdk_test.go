@@ -13,6 +13,140 @@ import (
 	"github.com/minio/minio-go/v7"
 )
 
+// TestMinioSDK_CreateBucket tests bucket creation
+func TestMinioSDK_CreateBucket(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	client, err := ts.MinioClient()
+	if err != nil {
+		t.Fatalf("failed to create Minio client: %v", err)
+	}
+
+	ctx := context.Background()
+
+	t.Run("create new bucket", func(t *testing.T) {
+		bucketName := "new-minio-bucket"
+		err := client.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
+		if err != nil {
+			t.Fatalf("MakeBucket failed: %v", err)
+		}
+
+		// Verify bucket exists by uploading a file
+		_, err = client.PutObject(ctx, bucketName, "test.txt", bytes.NewReader([]byte("test")), 4, minio.PutObjectOptions{})
+		if err != nil {
+			t.Fatalf("PutObject to new bucket failed: %v", err)
+		}
+
+		// Clean up the object
+		_ = client.RemoveObject(ctx, bucketName, "test.txt", minio.RemoveObjectOptions{})
+	})
+
+	t.Run("create existing bucket returns error", func(t *testing.T) {
+		// TestBucket is already created
+		err := client.MakeBucket(ctx, TestBucket, minio.MakeBucketOptions{})
+		if err == nil {
+			t.Fatal("expected error when creating existing bucket")
+		}
+	})
+
+	t.Run("create bucket with invalid name", func(t *testing.T) {
+		err := client.MakeBucket(ctx, "INVALID", minio.MakeBucketOptions{})
+		if err == nil {
+			t.Fatal("expected error for invalid bucket name")
+		}
+	})
+
+	t.Run("read-only credentials cannot create bucket", func(t *testing.T) {
+		roClient, _ := ts.MinioClientWithCreds(ReadOnlyAccessKeyID, ReadOnlySecretAccessKey)
+		err := roClient.MakeBucket(ctx, "should-fail-bucket", minio.MakeBucketOptions{})
+		if err == nil {
+			t.Fatal("expected error with read-only credentials")
+		}
+	})
+}
+
+// TestMinioSDK_DeleteBucket tests bucket deletion
+func TestMinioSDK_DeleteBucket(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	client, err := ts.MinioClient()
+	if err != nil {
+		t.Fatalf("failed to create Minio client: %v", err)
+	}
+
+	ctx := context.Background()
+
+	t.Run("delete empty bucket", func(t *testing.T) {
+		bucketName := "delete-me-minio"
+
+		// Create bucket
+		err := client.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
+		if err != nil {
+			t.Fatalf("MakeBucket failed: %v", err)
+		}
+
+		// Delete bucket
+		err = client.RemoveBucket(ctx, bucketName)
+		if err != nil {
+			t.Fatalf("RemoveBucket failed: %v", err)
+		}
+
+		// Verify bucket no longer exists by trying to upload
+		_, err = client.PutObject(ctx, bucketName, "test.txt", bytes.NewReader([]byte("test")), 4, minio.PutObjectOptions{})
+		if err == nil {
+			t.Fatal("expected error for deleted bucket")
+		}
+	})
+
+	t.Run("delete non-empty bucket fails", func(t *testing.T) {
+		bucketName := "nonempty-minio-bucket"
+
+		// Create bucket
+		err := client.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
+		if err != nil {
+			t.Fatalf("MakeBucket failed: %v", err)
+		}
+
+		// Add an object
+		_, err = client.PutObject(ctx, bucketName, "test-file.txt", bytes.NewReader([]byte("content")), 7, minio.PutObjectOptions{})
+		if err != nil {
+			t.Fatalf("PutObject failed: %v", err)
+		}
+
+		// Try to delete - should fail
+		err = client.RemoveBucket(ctx, bucketName)
+		if err == nil {
+			t.Fatal("expected error when deleting non-empty bucket")
+		}
+	})
+
+	t.Run("delete non-existent bucket fails", func(t *testing.T) {
+		err := client.RemoveBucket(ctx, "nonexistent-minio-bucket")
+		if err == nil {
+			t.Fatal("expected error for non-existent bucket")
+		}
+	})
+
+	t.Run("read-only credentials cannot delete bucket", func(t *testing.T) {
+		bucketName := "ro-delete-minio-test"
+
+		// Create bucket with RW creds
+		err := client.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
+		if err != nil {
+			t.Fatalf("MakeBucket failed: %v", err)
+		}
+
+		// Try to delete with RO creds
+		roClient, _ := ts.MinioClientWithCreds(ReadOnlyAccessKeyID, ReadOnlySecretAccessKey)
+		err = roClient.RemoveBucket(ctx, bucketName)
+		if err == nil {
+			t.Fatal("expected error with read-only credentials")
+		}
+	})
+}
+
 // TestMinioSDK_BucketExists tests bucket existence check
 // Note: Minio SDK's BucketExists may behave differently with minimal S3 implementations.
 // We test bucket operations through other methods that work more reliably.

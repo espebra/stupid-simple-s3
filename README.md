@@ -9,7 +9,7 @@ A minimal S3-compatible object storage service in Go. Designed for single-server
 
 ## Features
 
-- Single bucket configuration
+- Multi-bucket support via S3 CreateBucket/DeleteBucket API
 - AWS Signature v4 authentication
 - Read-only and read-write S3 credentials
 - Presigned URL support for temporary access
@@ -26,7 +26,7 @@ The service is configured using environment variables:
 |----------|-------------|---------|
 | `STUPID_HOST` | Listen host | (all interfaces) |
 | `STUPID_PORT` | Listen port | `5553` |
-| `STUPID_BUCKET_NAME` | Bucket name | (required) |
+| `STUPID_BUCKET_NAME` | Bucket to auto-create at startup | (optional) |
 | `STUPID_STORAGE_PATH` | Storage path for objects | `/var/lib/stupid-simple-s3/data` |
 | `STUPID_MULTIPART_PATH` | Storage path for multipart uploads | `/var/lib/stupid-simple-s3/tmp` |
 | `STUPID_CLEANUP_ENABLED` | Enable cleanup job (`true`/`false`) | `true` |
@@ -77,12 +77,22 @@ make vendor
 mkdir -p /var/lib/stupid-simple-s3/data /var/lib/stupid-simple-s3/tmp
 
 # Set required environment variables and run
-export STUPID_BUCKET_NAME="my-bucket"
+export STUPID_BUCKET_NAME="my-bucket"  # Optional: auto-creates bucket at startup
 export STUPID_STORAGE_PATH="/var/lib/stupid-simple-s3/data"
 export STUPID_MULTIPART_PATH="/var/lib/stupid-simple-s3/tmp"
 export STUPID_RW_ACCESS_KEY="AKIAIOSFODNN7EXAMPLE"
 export STUPID_RW_SECRET_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 ./bin/stupid-simple-s3
+```
+
+Buckets can also be created dynamically via the S3 API:
+
+```bash
+# Create a bucket
+aws --endpoint-url http://localhost:5553 s3 mb s3://my-bucket
+
+# Delete an empty bucket
+aws --endpoint-url http://localhost:5553 s3 rb s3://my-bucket
 ```
 
 ## Usage with AWS CLI
@@ -141,6 +151,8 @@ Presigned URL parameters:
 
 | Operation | Method | Path |
 |-----------|--------|------|
+| CreateBucket | PUT | `/{bucket}` |
+| DeleteBucket | DELETE | `/{bucket}` |
 | HeadBucket | HEAD | `/{bucket}` |
 | ListObjectsV2 | GET | `/{bucket}?list-type=2` |
 | PutObject | PUT | `/{bucket}/{key}` |
@@ -173,6 +185,9 @@ Available metrics:
 | `stupid_simple_s3_uploads_active` | Gauge | Number of currently active upload operations |
 | `stupid_simple_s3_downloads_active` | Gauge | Number of currently active download operations |
 | `stupid_simple_s3_auth_failures_total` | Counter | Authentication failures by reason |
+| `stupid_simple_s3_buckets_total` | Gauge | Current number of buckets |
+| `stupid_simple_s3_bucket_creations_total` | Counter | Total bucket creations |
+| `stupid_simple_s3_bucket_deletions_total` | Counter | Total bucket deletions |
 
 Example Prometheus scrape config:
 
@@ -189,14 +204,16 @@ scrape_configs:
 
 ## Storage Layout
 
-Objects are stored on the filesystem with a 4-character hash prefix (65,536 buckets) for even distribution:
+Objects are stored on the filesystem organized by bucket, with a 4-character hash prefix (65,536 directories per bucket) for even distribution:
 
 ```
-/var/lib/stupid-simple-s3/data/objects/
-  {4-char-hash-prefix}/
-    {base64-key}/
-      data        # object content
-      meta.json   # metadata (key, size, content-type, etag, etc.)
+/var/lib/stupid-simple-s3/data/buckets/
+  {bucket-name}/
+    objects/
+      {4-char-hash-prefix}/
+        {base64-key}/
+          data        # object content
+          meta.json   # metadata (key, size, content-type, etag, etc.)
 
 /var/lib/stupid-simple-s3/tmp/
   {upload-id}/

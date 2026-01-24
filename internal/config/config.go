@@ -255,9 +255,7 @@ func parseEnvDuration(key string, defaultValue time.Duration) time.Duration {
 }
 
 func (c *Config) validate() error {
-	if c.Bucket.Name == "" {
-		return fmt.Errorf("bucket.name is required")
-	}
+	// Bucket name is optional - buckets can be created via API
 	if c.Storage.Path == "" {
 		return fmt.Errorf("storage.path is required")
 	}
