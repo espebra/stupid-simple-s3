@@ -19,7 +19,12 @@ import (
 )
 
 // CreateMultipartUpload initializes a new multipart upload
-func (fs *FilesystemStorage) CreateMultipartUpload(key string, contentType string, metadata map[string]string) (string, error) {
+func (fs *FilesystemStorage) CreateMultipartUpload(bucket, key string, contentType string, metadata map[string]string) (string, error) {
+	// Validate the bucket name upfront
+	if err := ValidateBucketName(bucket); err != nil {
+		return "", err
+	}
+
 	// Validate the key upfront to fail early
 	if err := ValidateKey(key); err != nil {
 		return "", err
@@ -34,6 +39,7 @@ func (fs *FilesystemStorage) CreateMultipartUpload(key string, contentType strin
 
 	uploadMeta := &s3.MultipartUploadMetadata{
 		UploadID:     uploadID,
+		Bucket:       bucket,
 		Key:          key,
 		Created:      time.Now().UTC(),
 		ContentType:  contentType,
@@ -174,7 +180,7 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	}
 
 	// Create object directory
-	objPath, keyErr := fs.keyToPath(uploadMeta.Key)
+	objPath, keyErr := fs.keyToPath(uploadMeta.Bucket, uploadMeta.Key)
 	if keyErr != nil {
 		return nil, keyErr
 	}

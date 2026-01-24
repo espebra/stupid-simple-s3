@@ -12,6 +12,8 @@ import (
 	"github.com/espen/stupid-simple-s3/internal/s3"
 )
 
+const testBucket = "test-bucket"
+
 func setupTestStorage(t *testing.T) (*FilesystemStorage, func()) {
 	t.Helper()
 
@@ -27,6 +29,12 @@ func setupTestStorage(t *testing.T) (*FilesystemStorage, func()) {
 	if err != nil {
 		os.RemoveAll(tmpDir)
 		t.Fatalf("failed to create storage: %v", err)
+	}
+
+	// Create the test bucket
+	if err := storage.CreateBucket(testBucket); err != nil {
+		os.RemoveAll(tmpDir)
+		t.Fatalf("failed to create test bucket: %v", err)
 	}
 
 	cleanup := func() {
@@ -56,14 +64,223 @@ func TestNewFilesystemStorage(t *testing.T) {
 	}
 
 	// Check directories were created
-	objectsPath := filepath.Join(basePath, "objects")
-	if _, err := os.Stat(objectsPath); os.IsNotExist(err) {
-		t.Error("objects directory was not created")
+	bucketsPath := filepath.Join(basePath, "buckets")
+	if _, err := os.Stat(bucketsPath); os.IsNotExist(err) {
+		t.Error("buckets directory was not created")
 	}
 
 	if _, err := os.Stat(multipartPath); os.IsNotExist(err) {
 		t.Error("multipart directory was not created")
 	}
+}
+
+func TestValidateBucketName(t *testing.T) {
+	tests := []struct {
+		name    string
+		bucket  string
+		wantErr bool
+	}{
+		// Valid names
+		{"simple name", "mybucket", false},
+		{"name with hyphens", "my-bucket-name", false},
+		{"name with numbers", "bucket123", false},
+		{"min length", "abc", false},
+		{"max length", strings.Repeat("a", 63), false},
+
+		// Invalid names - length
+		{"too short", "ab", true},
+		{"too long", strings.Repeat("a", 64), true},
+		{"empty", "", true},
+
+		// Invalid names - characters
+		{"uppercase", "MyBucket", true},
+		{"underscore", "my_bucket", true},
+		{"dot", "my.bucket", true},
+		{"space", "my bucket", true},
+
+		// Invalid names - start/end with hyphen
+		{"starts with hyphen", "-mybucket", true},
+		{"ends with hyphen", "mybucket-", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateBucketName(tt.bucket)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateBucketName(%q) error = %v, wantErr %v", tt.bucket, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestCreateBucket(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "sss-bucket-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	basePath := filepath.Join(tmpDir, "data")
+	multipartPath := filepath.Join(tmpDir, "multipart")
+
+	storage, err := NewFilesystemStorage(basePath, multipartPath)
+	if err != nil {
+		t.Fatalf("failed to create storage: %v", err)
+	}
+
+	t.Run("create new bucket", func(t *testing.T) {
+		err := storage.CreateBucket("new-bucket")
+		if err != nil {
+			t.Fatalf("CreateBucket failed: %v", err)
+		}
+
+		// Verify bucket directory exists
+		bucketPath := filepath.Join(basePath, "buckets", "new-bucket", "objects")
+		if _, err := os.Stat(bucketPath); os.IsNotExist(err) {
+			t.Error("bucket directory was not created")
+		}
+	})
+
+	t.Run("create existing bucket returns error", func(t *testing.T) {
+		err := storage.CreateBucket("new-bucket")
+		if err == nil {
+			t.Error("expected error when creating existing bucket")
+		}
+		if err != ErrBucketAlreadyExists {
+			t.Errorf("error = %v, want ErrBucketAlreadyExists", err)
+		}
+	})
+
+	t.Run("create bucket with invalid name", func(t *testing.T) {
+		err := storage.CreateBucket("INVALID")
+		if err == nil {
+			t.Error("expected error for invalid bucket name")
+		}
+	})
+}
+
+func TestBucketExists(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "sss-bucket-exists-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	basePath := filepath.Join(tmpDir, "data")
+	multipartPath := filepath.Join(tmpDir, "multipart")
+
+	storage, err := NewFilesystemStorage(basePath, multipartPath)
+	if err != nil {
+		t.Fatalf("failed to create storage: %v", err)
+	}
+
+	t.Run("non-existing bucket", func(t *testing.T) {
+		exists, err := storage.BucketExists("nonexistent")
+		if err != nil {
+			t.Fatalf("BucketExists failed: %v", err)
+		}
+		if exists {
+			t.Error("expected bucket to not exist")
+		}
+	})
+
+	t.Run("existing bucket", func(t *testing.T) {
+		// Create bucket first
+		if err := storage.CreateBucket("existing-bucket"); err != nil {
+			t.Fatalf("CreateBucket failed: %v", err)
+		}
+
+		exists, err := storage.BucketExists("existing-bucket")
+		if err != nil {
+			t.Fatalf("BucketExists failed: %v", err)
+		}
+		if !exists {
+			t.Error("expected bucket to exist")
+		}
+	})
+
+	t.Run("invalid bucket name", func(t *testing.T) {
+		_, err := storage.BucketExists("INVALID")
+		if err == nil {
+			t.Error("expected error for invalid bucket name")
+		}
+	})
+}
+
+func TestDeleteBucket(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "sss-delete-bucket-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	basePath := filepath.Join(tmpDir, "data")
+	multipartPath := filepath.Join(tmpDir, "multipart")
+
+	storage, err := NewFilesystemStorage(basePath, multipartPath)
+	if err != nil {
+		t.Fatalf("failed to create storage: %v", err)
+	}
+
+	t.Run("delete empty bucket", func(t *testing.T) {
+		// Create bucket first
+		if err := storage.CreateBucket("empty-bucket"); err != nil {
+			t.Fatalf("CreateBucket failed: %v", err)
+		}
+
+		// Delete it
+		if err := storage.DeleteBucket("empty-bucket"); err != nil {
+			t.Fatalf("DeleteBucket failed: %v", err)
+		}
+
+		// Verify it's gone
+		exists, err := storage.BucketExists("empty-bucket")
+		if err != nil {
+			t.Fatalf("BucketExists failed: %v", err)
+		}
+		if exists {
+			t.Error("bucket should not exist after deletion")
+		}
+	})
+
+	t.Run("delete non-empty bucket", func(t *testing.T) {
+		// Create bucket
+		if err := storage.CreateBucket("nonempty-bucket"); err != nil {
+			t.Fatalf("CreateBucket failed: %v", err)
+		}
+
+		// Add an object
+		_, err := storage.PutObject("nonempty-bucket", "test-key", "text/plain", nil, bytes.NewReader([]byte("content")))
+		if err != nil {
+			t.Fatalf("PutObject failed: %v", err)
+		}
+
+		// Try to delete - should fail
+		err = storage.DeleteBucket("nonempty-bucket")
+		if err == nil {
+			t.Fatal("expected error when deleting non-empty bucket")
+		}
+		if err != ErrBucketNotEmpty {
+			t.Errorf("expected ErrBucketNotEmpty, got: %v", err)
+		}
+	})
+
+	t.Run("delete non-existent bucket", func(t *testing.T) {
+		err := storage.DeleteBucket("nonexistent-bucket")
+		if err == nil {
+			t.Fatal("expected error when deleting non-existent bucket")
+		}
+		if err != ErrBucketNotFound {
+			t.Errorf("expected ErrBucketNotFound, got: %v", err)
+		}
+	})
+
+	t.Run("delete with invalid name", func(t *testing.T) {
+		err := storage.DeleteBucket("INVALID")
+		if err == nil {
+			t.Fatal("expected error for invalid bucket name")
+		}
+	})
 }
 
 func TestPutAndGetObject(t *testing.T) {
@@ -76,7 +293,7 @@ func TestPutAndGetObject(t *testing.T) {
 	metadata := map[string]string{"author": "test"}
 
 	// Put object
-	meta, err := storage.PutObject(key, contentType, metadata, bytes.NewReader(content))
+	meta, err := storage.PutObject(testBucket, key, contentType, metadata, bytes.NewReader(content))
 	if err != nil {
 		t.Fatalf("PutObject failed: %v", err)
 	}
@@ -95,7 +312,7 @@ func TestPutAndGetObject(t *testing.T) {
 	}
 
 	// Get object
-	reader, getMeta, err := storage.GetObject(key)
+	reader, getMeta, err := storage.GetObject(testBucket, key)
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
@@ -127,13 +344,13 @@ func TestHeadObject(t *testing.T) {
 	content := []byte("Test content for head")
 
 	// Put object first
-	putMeta, err := storage.PutObject(key, "text/plain", nil, bytes.NewReader(content))
+	putMeta, err := storage.PutObject(testBucket, key, "text/plain", nil, bytes.NewReader(content))
 	if err != nil {
 		t.Fatalf("PutObject failed: %v", err)
 	}
 
 	// Head object
-	headMeta, err := storage.HeadObject(key)
+	headMeta, err := storage.HeadObject(testBucket, key)
 	if err != nil {
 		t.Fatalf("HeadObject failed: %v", err)
 	}
@@ -153,7 +370,7 @@ func TestHeadObjectNotFound(t *testing.T) {
 	storage, cleanup := setupTestStorage(t)
 	defer cleanup()
 
-	_, err := storage.HeadObject("nonexistent-key")
+	_, err := storage.HeadObject(testBucket, "nonexistent-key")
 	if err == nil {
 		t.Error("expected error for nonexistent object")
 	}
@@ -170,13 +387,13 @@ func TestDeleteObject(t *testing.T) {
 	content := []byte("To be deleted")
 
 	// Put object
-	_, err := storage.PutObject(key, "text/plain", nil, bytes.NewReader(content))
+	_, err := storage.PutObject(testBucket, key, "text/plain", nil, bytes.NewReader(content))
 	if err != nil {
 		t.Fatalf("PutObject failed: %v", err)
 	}
 
 	// Verify it exists
-	exists, err := storage.ObjectExists(key)
+	exists, err := storage.ObjectExists(testBucket, key)
 	if err != nil {
 		t.Fatalf("ObjectExists failed: %v", err)
 	}
@@ -185,13 +402,13 @@ func TestDeleteObject(t *testing.T) {
 	}
 
 	// Delete object
-	err = storage.DeleteObject(key)
+	err = storage.DeleteObject(testBucket, key)
 	if err != nil {
 		t.Fatalf("DeleteObject failed: %v", err)
 	}
 
 	// Verify it's gone
-	exists, err = storage.ObjectExists(key)
+	exists, err = storage.ObjectExists(testBucket, key)
 	if err != nil {
 		t.Fatalf("ObjectExists failed: %v", err)
 	}
@@ -205,7 +422,7 @@ func TestDeleteNonexistentObject(t *testing.T) {
 	defer cleanup()
 
 	// Deleting nonexistent object should not error (S3 behavior)
-	err := storage.DeleteObject("nonexistent-key")
+	err := storage.DeleteObject(testBucket, "nonexistent-key")
 	if err != nil {
 		t.Errorf("DeleteObject on nonexistent key should not error: %v", err)
 	}
@@ -218,7 +435,7 @@ func TestObjectExists(t *testing.T) {
 	key := "exists-test.txt"
 
 	// Should not exist initially
-	exists, err := storage.ObjectExists(key)
+	exists, err := storage.ObjectExists(testBucket, key)
 	if err != nil {
 		t.Fatalf("ObjectExists failed: %v", err)
 	}
@@ -227,13 +444,13 @@ func TestObjectExists(t *testing.T) {
 	}
 
 	// Put object
-	_, err = storage.PutObject(key, "text/plain", nil, bytes.NewReader([]byte("test")))
+	_, err = storage.PutObject(testBucket, key, "text/plain", nil, bytes.NewReader([]byte("test")))
 	if err != nil {
 		t.Fatalf("PutObject failed: %v", err)
 	}
 
 	// Should exist now
-	exists, err = storage.ObjectExists(key)
+	exists, err = storage.ObjectExists(testBucket, key)
 	if err != nil {
 		t.Fatalf("ObjectExists failed: %v", err)
 	}
@@ -249,14 +466,14 @@ func TestPutObjectOverwrite(t *testing.T) {
 	key := "overwrite-test.txt"
 
 	// Put initial content
-	_, err := storage.PutObject(key, "text/plain", nil, bytes.NewReader([]byte("initial")))
+	_, err := storage.PutObject(testBucket, key, "text/plain", nil, bytes.NewReader([]byte("initial")))
 	if err != nil {
 		t.Fatalf("PutObject failed: %v", err)
 	}
 
 	// Overwrite with new content
 	newContent := []byte("overwritten content")
-	meta, err := storage.PutObject(key, "text/html", nil, bytes.NewReader(newContent))
+	meta, err := storage.PutObject(testBucket, key, "text/html", nil, bytes.NewReader(newContent))
 	if err != nil {
 		t.Fatalf("PutObject (overwrite) failed: %v", err)
 	}
@@ -266,7 +483,7 @@ func TestPutObjectOverwrite(t *testing.T) {
 	}
 
 	// Verify new content
-	reader, _, err := storage.GetObject(key)
+	reader, _, err := storage.GetObject(testBucket, key)
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
@@ -293,12 +510,12 @@ func TestKeyWithSpecialCharacters(t *testing.T) {
 		t.Run(key, func(t *testing.T) {
 			content := []byte("content for " + key)
 
-			_, err := storage.PutObject(key, "text/plain", nil, bytes.NewReader(content))
+			_, err := storage.PutObject(testBucket, key, "text/plain", nil, bytes.NewReader(content))
 			if err != nil {
 				t.Fatalf("PutObject failed for key %q: %v", key, err)
 			}
 
-			reader, _, err := storage.GetObject(key)
+			reader, _, err := storage.GetObject(testBucket, key)
 			if err != nil {
 				t.Fatalf("GetObject failed for key %q: %v", key, err)
 			}
@@ -320,7 +537,7 @@ func TestEmptyObject(t *testing.T) {
 	key := "empty.txt"
 	content := []byte{}
 
-	meta, err := storage.PutObject(key, "text/plain", nil, bytes.NewReader(content))
+	meta, err := storage.PutObject(testBucket, key, "text/plain", nil, bytes.NewReader(content))
 	if err != nil {
 		t.Fatalf("PutObject failed: %v", err)
 	}
@@ -329,7 +546,7 @@ func TestEmptyObject(t *testing.T) {
 		t.Errorf("Size = %d, want 0", meta.Size)
 	}
 
-	reader, getMeta, err := storage.GetObject(key)
+	reader, getMeta, err := storage.GetObject(testBucket, key)
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
@@ -356,7 +573,7 @@ func TestLargeObject(t *testing.T) {
 		content[i] = byte(i % 256)
 	}
 
-	meta, err := storage.PutObject(key, "application/octet-stream", nil, bytes.NewReader(content))
+	meta, err := storage.PutObject(testBucket, key, "application/octet-stream", nil, bytes.NewReader(content))
 	if err != nil {
 		t.Fatalf("PutObject failed: %v", err)
 	}
@@ -365,7 +582,7 @@ func TestLargeObject(t *testing.T) {
 		t.Errorf("Size = %d, want %d", meta.Size, size)
 	}
 
-	reader, _, err := storage.GetObject(key)
+	reader, _, err := storage.GetObject(testBucket, key)
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
@@ -391,7 +608,7 @@ func TestMultipartUpload(t *testing.T) {
 	contentType := "text/plain"
 
 	// Create multipart upload
-	uploadID, err := storage.CreateMultipartUpload(key, contentType, nil)
+	uploadID, err := storage.CreateMultipartUpload(testBucket, key, contentType, nil)
 	if err != nil {
 		t.Fatalf("CreateMultipartUpload failed: %v", err)
 	}
@@ -438,7 +655,7 @@ func TestMultipartUpload(t *testing.T) {
 	}
 
 	// Verify content
-	reader, _, err := storage.GetObject(key)
+	reader, _, err := storage.GetObject(testBucket, key)
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
@@ -464,7 +681,7 @@ func TestAbortMultipartUpload(t *testing.T) {
 	key := "abort-test.txt"
 
 	// Create upload
-	uploadID, err := storage.CreateMultipartUpload(key, "text/plain", nil)
+	uploadID, err := storage.CreateMultipartUpload(testBucket, key, "text/plain", nil)
 	if err != nil {
 		t.Fatalf("CreateMultipartUpload failed: %v", err)
 	}
@@ -496,7 +713,7 @@ func TestGetMultipartUpload(t *testing.T) {
 	contentType := "application/json"
 	metadata := map[string]string{"custom": "value"}
 
-	uploadID, err := storage.CreateMultipartUpload(key, contentType, metadata)
+	uploadID, err := storage.CreateMultipartUpload(testBucket, key, contentType, metadata)
 	if err != nil {
 		t.Fatalf("CreateMultipartUpload failed: %v", err)
 	}
@@ -536,7 +753,7 @@ func TestCompleteMultipartUploadInvalidPartOrder(t *testing.T) {
 
 	key := "order-test.txt"
 
-	uploadID, err := storage.CreateMultipartUpload(key, "text/plain", nil)
+	uploadID, err := storage.CreateMultipartUpload(testBucket, key, "text/plain", nil)
 	if err != nil {
 		t.Fatalf("CreateMultipartUpload failed: %v", err)
 	}
@@ -565,7 +782,7 @@ func TestCompleteMultipartUploadMissingPart(t *testing.T) {
 
 	key := "missing-part-test.txt"
 
-	uploadID, err := storage.CreateMultipartUpload(key, "text/plain", nil)
+	uploadID, err := storage.CreateMultipartUpload(testBucket, key, "text/plain", nil)
 	if err != nil {
 		t.Fatalf("CreateMultipartUpload failed: %v", err)
 	}
@@ -590,7 +807,7 @@ func TestListParts(t *testing.T) {
 
 	key := "list-parts-test.txt"
 
-	uploadID, err := storage.CreateMultipartUpload(key, "text/plain", nil)
+	uploadID, err := storage.CreateMultipartUpload(testBucket, key, "text/plain", nil)
 	if err != nil {
 		t.Fatalf("CreateMultipartUpload failed: %v", err)
 	}
@@ -640,13 +857,13 @@ func TestListObjects(t *testing.T) {
 	}
 
 	for _, key := range objects {
-		if _, err := storage.PutObject(key, "text/plain", nil, bytes.NewReader([]byte("content"))); err != nil {
+		if _, err := storage.PutObject(testBucket, key, "text/plain", nil, bytes.NewReader([]byte("content"))); err != nil {
 			t.Fatalf("PutObject failed: %v", err)
 		}
 	}
 
 	t.Run("list all objects", func(t *testing.T) {
-		result, err := storage.ListObjects(ListObjectsOptions{})
+		result, err := storage.ListObjects(testBucket, ListObjectsOptions{})
 		if err != nil {
 			t.Fatalf("ListObjects failed: %v", err)
 		}
@@ -657,7 +874,7 @@ func TestListObjects(t *testing.T) {
 	})
 
 	t.Run("list with prefix", func(t *testing.T) {
-		result, err := storage.ListObjects(ListObjectsOptions{Prefix: "dir1/"})
+		result, err := storage.ListObjects(testBucket, ListObjectsOptions{Prefix: "dir1/"})
 		if err != nil {
 			t.Fatalf("ListObjects failed: %v", err)
 		}
@@ -668,7 +885,7 @@ func TestListObjects(t *testing.T) {
 	})
 
 	t.Run("list with delimiter", func(t *testing.T) {
-		result, err := storage.ListObjects(ListObjectsOptions{Delimiter: "/"})
+		result, err := storage.ListObjects(testBucket, ListObjectsOptions{Delimiter: "/"})
 		if err != nil {
 			t.Fatalf("ListObjects failed: %v", err)
 		}
@@ -683,7 +900,7 @@ func TestListObjects(t *testing.T) {
 	})
 
 	t.Run("list with prefix and delimiter", func(t *testing.T) {
-		result, err := storage.ListObjects(ListObjectsOptions{Prefix: "dir1/", Delimiter: "/"})
+		result, err := storage.ListObjects(testBucket, ListObjectsOptions{Prefix: "dir1/", Delimiter: "/"})
 		if err != nil {
 			t.Fatalf("ListObjects failed: %v", err)
 		}
@@ -698,7 +915,7 @@ func TestListObjects(t *testing.T) {
 	})
 
 	t.Run("list with max keys", func(t *testing.T) {
-		result, err := storage.ListObjects(ListObjectsOptions{MaxKeys: 2})
+		result, err := storage.ListObjects(testBucket, ListObjectsOptions{MaxKeys: 2})
 		if err != nil {
 			t.Fatalf("ListObjects failed: %v", err)
 		}
@@ -716,10 +933,10 @@ func TestListObjects(t *testing.T) {
 
 	t.Run("list with continuation token", func(t *testing.T) {
 		// Get first page
-		result1, _ := storage.ListObjects(ListObjectsOptions{MaxKeys: 2})
+		result1, _ := storage.ListObjects(testBucket, ListObjectsOptions{MaxKeys: 2})
 
 		// Get second page
-		result2, err := storage.ListObjects(ListObjectsOptions{
+		result2, err := storage.ListObjects(testBucket, ListObjectsOptions{
 			MaxKeys:           2,
 			ContinuationToken: result1.NextContinuationToken,
 		})
@@ -747,13 +964,13 @@ func TestCopyObject(t *testing.T) {
 	metadata := map[string]string{"author": "test"}
 
 	// Create source object
-	srcMeta, err := storage.PutObject(srcKey, "text/plain", metadata, bytes.NewReader(content))
+	srcMeta, err := storage.PutObject(testBucket, srcKey, "text/plain", metadata, bytes.NewReader(content))
 	if err != nil {
 		t.Fatalf("PutObject failed: %v", err)
 	}
 
 	// Copy object
-	dstMeta, err := storage.CopyObject(srcKey, dstKey)
+	dstMeta, err := storage.CopyObject(testBucket, srcKey, testBucket, dstKey)
 	if err != nil {
 		t.Fatalf("CopyObject failed: %v", err)
 	}
@@ -767,7 +984,7 @@ func TestCopyObject(t *testing.T) {
 	}
 
 	// Verify destination content
-	reader, _, err := storage.GetObject(dstKey)
+	reader, _, err := storage.GetObject(testBucket, dstKey)
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
@@ -779,7 +996,7 @@ func TestCopyObject(t *testing.T) {
 	}
 
 	// Verify source still exists
-	exists, _ := storage.ObjectExists(srcKey)
+	exists, _ := storage.ObjectExists(testBucket, srcKey)
 	if !exists {
 		t.Error("source object should still exist after copy")
 	}
@@ -789,7 +1006,7 @@ func TestCopyObjectNotFound(t *testing.T) {
 	storage, cleanup := setupTestStorage(t)
 	defer cleanup()
 
-	_, err := storage.CopyObject("nonexistent", "destination")
+	_, err := storage.CopyObject(testBucket, "nonexistent", testBucket, "destination")
 	if err == nil {
 		t.Error("expected error when copying nonexistent object")
 	}
@@ -802,13 +1019,13 @@ func TestGetObjectRange(t *testing.T) {
 	key := "range-test.txt"
 	content := []byte("0123456789ABCDEFGHIJ") // 20 bytes
 
-	_, err := storage.PutObject(key, "text/plain", nil, bytes.NewReader(content))
+	_, err := storage.PutObject(testBucket, key, "text/plain", nil, bytes.NewReader(content))
 	if err != nil {
 		t.Fatalf("PutObject failed: %v", err)
 	}
 
 	t.Run("full range", func(t *testing.T) {
-		reader, _, err := storage.GetObjectRange(key, 0, 19)
+		reader, _, err := storage.GetObjectRange(testBucket, key, 0, 19)
 		if err != nil {
 			t.Fatalf("GetObjectRange failed: %v", err)
 		}
@@ -821,7 +1038,7 @@ func TestGetObjectRange(t *testing.T) {
 	})
 
 	t.Run("partial range from start", func(t *testing.T) {
-		reader, _, err := storage.GetObjectRange(key, 0, 9)
+		reader, _, err := storage.GetObjectRange(testBucket, key, 0, 9)
 		if err != nil {
 			t.Fatalf("GetObjectRange failed: %v", err)
 		}
@@ -835,7 +1052,7 @@ func TestGetObjectRange(t *testing.T) {
 	})
 
 	t.Run("partial range from middle", func(t *testing.T) {
-		reader, _, err := storage.GetObjectRange(key, 5, 14)
+		reader, _, err := storage.GetObjectRange(testBucket, key, 5, 14)
 		if err != nil {
 			t.Fatalf("GetObjectRange failed: %v", err)
 		}
@@ -849,7 +1066,7 @@ func TestGetObjectRange(t *testing.T) {
 	})
 
 	t.Run("range past end", func(t *testing.T) {
-		reader, _, err := storage.GetObjectRange(key, 15, 100)
+		reader, _, err := storage.GetObjectRange(testBucket, key, 15, 100)
 		if err != nil {
 			t.Fatalf("GetObjectRange failed: %v", err)
 		}
@@ -863,7 +1080,7 @@ func TestGetObjectRange(t *testing.T) {
 	})
 
 	t.Run("single byte", func(t *testing.T) {
-		reader, _, err := storage.GetObjectRange(key, 5, 5)
+		reader, _, err := storage.GetObjectRange(testBucket, key, 5, 5)
 		if err != nil {
 			t.Fatalf("GetObjectRange failed: %v", err)
 		}
@@ -880,7 +1097,7 @@ func TestGetObjectRangeNotFound(t *testing.T) {
 	storage, cleanup := setupTestStorage(t)
 	defer cleanup()
 
-	_, _, err := storage.GetObjectRange("nonexistent", 0, 10)
+	_, _, err := storage.GetObjectRange(testBucket, "nonexistent", 0, 10)
 	if err == nil {
 		t.Error("expected error for nonexistent object")
 	}
@@ -951,7 +1168,7 @@ func TestPathTraversalPrevention(t *testing.T) {
 
 	for _, key := range traversalKeys {
 		t.Run("PutObject_"+key, func(t *testing.T) {
-			_, err := storage.PutObject(key, "text/plain", nil, bytes.NewReader([]byte("test")))
+			_, err := storage.PutObject(testBucket, key, "text/plain", nil, bytes.NewReader([]byte("test")))
 			if err == nil {
 				t.Fatalf("PutObject(%q) should have failed with path traversal error", key)
 			}
@@ -961,7 +1178,7 @@ func TestPathTraversalPrevention(t *testing.T) {
 		})
 
 		t.Run("GetObject_"+key, func(t *testing.T) {
-			_, _, err := storage.GetObject(key)
+			_, _, err := storage.GetObject(testBucket, key)
 			if err == nil {
 				t.Fatalf("GetObject(%q) should have failed with path traversal error", key)
 			}
@@ -971,7 +1188,7 @@ func TestPathTraversalPrevention(t *testing.T) {
 		})
 
 		t.Run("HeadObject_"+key, func(t *testing.T) {
-			_, err := storage.HeadObject(key)
+			_, err := storage.HeadObject(testBucket, key)
 			if err == nil {
 				t.Fatalf("HeadObject(%q) should have failed with path traversal error", key)
 			}
@@ -981,7 +1198,7 @@ func TestPathTraversalPrevention(t *testing.T) {
 		})
 
 		t.Run("DeleteObject_"+key, func(t *testing.T) {
-			err := storage.DeleteObject(key)
+			err := storage.DeleteObject(testBucket, key)
 			if err == nil {
 				t.Fatalf("DeleteObject(%q) should have failed with path traversal error", key)
 			}
@@ -991,7 +1208,7 @@ func TestPathTraversalPrevention(t *testing.T) {
 		})
 
 		t.Run("ObjectExists_"+key, func(t *testing.T) {
-			_, err := storage.ObjectExists(key)
+			_, err := storage.ObjectExists(testBucket, key)
 			if err == nil {
 				t.Fatalf("ObjectExists(%q) should have failed with path traversal error", key)
 			}
@@ -1001,7 +1218,7 @@ func TestPathTraversalPrevention(t *testing.T) {
 		})
 
 		t.Run("GetObjectRange_"+key, func(t *testing.T) {
-			_, _, err := storage.GetObjectRange(key, 0, 10)
+			_, _, err := storage.GetObjectRange(testBucket, key, 0, 10)
 			if err == nil {
 				t.Fatalf("GetObjectRange(%q) should have failed with path traversal error", key)
 			}
@@ -1011,7 +1228,7 @@ func TestPathTraversalPrevention(t *testing.T) {
 		})
 
 		t.Run("CopyObject_src_"+key, func(t *testing.T) {
-			_, err := storage.CopyObject(key, "valid-dest.txt")
+			_, err := storage.CopyObject(testBucket, key, testBucket, "valid-dest.txt")
 			if err == nil {
 				t.Fatalf("CopyObject(%q, dst) should have failed with path traversal error", key)
 			}
@@ -1021,7 +1238,7 @@ func TestPathTraversalPrevention(t *testing.T) {
 		})
 
 		t.Run("CreateMultipartUpload_"+key, func(t *testing.T) {
-			_, err := storage.CreateMultipartUpload(key, "text/plain", nil)
+			_, err := storage.CreateMultipartUpload(testBucket, key, "text/plain", nil)
 			if err == nil {
 				t.Fatalf("CreateMultipartUpload(%q) should have failed with path traversal error", key)
 			}
@@ -1048,7 +1265,7 @@ func TestCleanupStaleUploads(t *testing.T) {
 
 	t.Run("cleans old uploads", func(t *testing.T) {
 		// Create an upload
-		uploadID, err := storage.CreateMultipartUpload("cleanup-test.txt", "text/plain", nil)
+		uploadID, err := storage.CreateMultipartUpload(testBucket, "cleanup-test.txt", "text/plain", nil)
 		if err != nil {
 			t.Fatalf("CreateMultipartUpload failed: %v", err)
 		}
@@ -1077,7 +1294,7 @@ func TestCleanupStaleUploads(t *testing.T) {
 
 	t.Run("keeps recent uploads", func(t *testing.T) {
 		// Create an upload
-		uploadID, err := storage.CreateMultipartUpload("keep-test.txt", "text/plain", nil)
+		uploadID, err := storage.CreateMultipartUpload(testBucket, "keep-test.txt", "text/plain", nil)
 		if err != nil {
 			t.Fatalf("CreateMultipartUpload failed: %v", err)
 		}
@@ -1104,7 +1321,7 @@ func TestCleanupStaleUploads(t *testing.T) {
 	t.Run("handles multiple uploads", func(t *testing.T) {
 		// Create multiple uploads
 		for i := 0; i < 3; i++ {
-			uploadID, err := storage.CreateMultipartUpload("multi-cleanup-"+string(rune('a'+i))+".txt", "text/plain", nil)
+			uploadID, err := storage.CreateMultipartUpload(testBucket, "multi-cleanup-"+string(rune('a'+i))+".txt", "text/plain", nil)
 			if err != nil {
 				t.Fatalf("CreateMultipartUpload failed: %v", err)
 			}

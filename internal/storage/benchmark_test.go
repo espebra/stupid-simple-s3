@@ -13,6 +13,8 @@ import (
 	"github.com/espen/stupid-simple-s3/internal/s3"
 )
 
+const benchBucket = "bench-bucket"
+
 func setupBenchStorage(b *testing.B) (*FilesystemStorage, func()) {
 	b.Helper()
 
@@ -28,6 +30,12 @@ func setupBenchStorage(b *testing.B) (*FilesystemStorage, func()) {
 	if err != nil {
 		os.RemoveAll(tmpDir)
 		b.Fatalf("failed to create storage: %v", err)
+	}
+
+	// Create the benchmark bucket
+	if err := storage.CreateBucket(benchBucket); err != nil {
+		os.RemoveAll(tmpDir)
+		b.Fatalf("failed to create benchmark bucket: %v", err)
 	}
 
 	cleanup := func() {
@@ -59,7 +67,7 @@ func BenchmarkPutObject(b *testing.B) {
 
 			for i := 0; i < b.N; i++ {
 				key := fmt.Sprintf("bench-object-%d", i)
-				_, err := storage.PutObject(key, "application/octet-stream", nil, bytes.NewReader(content))
+				_, err := storage.PutObject(benchBucket, key, "application/octet-stream", nil, bytes.NewReader(content))
 				if err != nil {
 					b.Fatalf("PutObject failed: %v", err)
 				}
@@ -85,7 +93,7 @@ func BenchmarkGetObject(b *testing.B) {
 			content := make([]byte, size)
 			_, _ = rand.Read(content)
 			key := "bench-get-object"
-			if _, err := storage.PutObject(key, "application/octet-stream", nil, bytes.NewReader(content)); err != nil {
+			if _, err := storage.PutObject(benchBucket, key, "application/octet-stream", nil, bytes.NewReader(content)); err != nil {
 				b.Fatalf("PutObject failed: %v", err)
 			}
 
@@ -93,7 +101,7 @@ func BenchmarkGetObject(b *testing.B) {
 			b.ResetTimer()
 
 			for i := 0; i < b.N; i++ {
-				reader, _, err := storage.GetObject(key)
+				reader, _, err := storage.GetObject(benchBucket, key)
 				if err != nil {
 					b.Fatalf("GetObject failed: %v", err)
 				}
@@ -110,14 +118,14 @@ func BenchmarkHeadObject(b *testing.B) {
 
 	// Create object first
 	key := "bench-head-object"
-	if _, err := storage.PutObject(key, "text/plain", nil, bytes.NewReader([]byte("content"))); err != nil {
+	if _, err := storage.PutObject(benchBucket, key, "text/plain", nil, bytes.NewReader([]byte("content"))); err != nil {
 		b.Fatalf("PutObject failed: %v", err)
 	}
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_, err := storage.HeadObject(key)
+		_, err := storage.HeadObject(benchBucket, key)
 		if err != nil {
 			b.Fatalf("HeadObject failed: %v", err)
 		}
@@ -131,7 +139,7 @@ func BenchmarkDeleteObject(b *testing.B) {
 	// Pre-create objects
 	for i := 0; i < b.N; i++ {
 		key := fmt.Sprintf("bench-delete-%d", i)
-		if _, err := storage.PutObject(key, "text/plain", nil, bytes.NewReader([]byte("content"))); err != nil {
+		if _, err := storage.PutObject(benchBucket, key, "text/plain", nil, bytes.NewReader([]byte("content"))); err != nil {
 			b.Fatalf("PutObject failed: %v", err)
 		}
 	}
@@ -140,7 +148,7 @@ func BenchmarkDeleteObject(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		key := fmt.Sprintf("bench-delete-%d", i)
-		err := storage.DeleteObject(key)
+		err := storage.DeleteObject(benchBucket, key)
 		if err != nil {
 			b.Fatalf("DeleteObject failed: %v", err)
 		}
@@ -152,14 +160,14 @@ func BenchmarkObjectExists(b *testing.B) {
 	defer cleanup()
 
 	key := "bench-exists-object"
-	if _, err := storage.PutObject(key, "text/plain", nil, bytes.NewReader([]byte("content"))); err != nil {
+	if _, err := storage.PutObject(benchBucket, key, "text/plain", nil, bytes.NewReader([]byte("content"))); err != nil {
 		b.Fatalf("PutObject failed: %v", err)
 	}
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_, err := storage.ObjectExists(key)
+		_, err := storage.ObjectExists(benchBucket, key)
 		if err != nil {
 			b.Fatalf("ObjectExists failed: %v", err)
 		}
@@ -192,7 +200,7 @@ func BenchmarkMultipartUpload(b *testing.B) {
 				for i := 0; i < b.N; i++ {
 					key := fmt.Sprintf("bench-multipart-%d", i)
 
-					uploadID, err := storage.CreateMultipartUpload(key, "application/octet-stream", nil)
+					uploadID, err := storage.CreateMultipartUpload(benchBucket, key, "application/octet-stream", nil)
 					if err != nil {
 						b.Fatalf("CreateMultipartUpload failed: %v", err)
 					}
@@ -235,7 +243,7 @@ func BenchmarkConcurrentPutObject(b *testing.B) {
 		for pb.Next() {
 			i := counter.Add(1)
 			key := fmt.Sprintf("bench-concurrent-%d", i)
-			_, err := storage.PutObject(key, "application/octet-stream", nil, bytes.NewReader(content))
+			_, err := storage.PutObject(benchBucket, key, "application/octet-stream", nil, bytes.NewReader(content))
 			if err != nil {
 				b.Errorf("PutObject failed: %v", err)
 			}
@@ -251,7 +259,7 @@ func BenchmarkConcurrentGetObject(b *testing.B) {
 	content := make([]byte, 64*1024) // 64KB
 	_, _ = rand.Read(content)
 	key := "bench-concurrent-get"
-	if _, err := storage.PutObject(key, "application/octet-stream", nil, bytes.NewReader(content)); err != nil {
+	if _, err := storage.PutObject(benchBucket, key, "application/octet-stream", nil, bytes.NewReader(content)); err != nil {
 		b.Fatalf("PutObject failed: %v", err)
 	}
 
@@ -260,7 +268,7 @@ func BenchmarkConcurrentGetObject(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			reader, _, err := storage.GetObject(key)
+			reader, _, err := storage.GetObject(benchBucket, key)
 			if err != nil {
 				b.Errorf("GetObject failed: %v", err)
 				continue
@@ -281,7 +289,7 @@ func BenchmarkMixedWorkload(b *testing.B) {
 	// Pre-populate some objects
 	for i := 0; i < 100; i++ {
 		key := fmt.Sprintf("preload-%d", i)
-		if _, err := storage.PutObject(key, "application/octet-stream", nil, bytes.NewReader(content)); err != nil {
+		if _, err := storage.PutObject(benchBucket, key, "application/octet-stream", nil, bytes.NewReader(content)); err != nil {
 			b.Fatalf("PutObject failed: %v", err)
 		}
 	}
@@ -295,17 +303,17 @@ func BenchmarkMixedWorkload(b *testing.B) {
 			switch {
 			case op < 3: // 30% writes
 				key := fmt.Sprintf("mixed-write-%d", i)
-				_, _ = storage.PutObject(key, "application/octet-stream", nil, bytes.NewReader(content))
+				_, _ = storage.PutObject(benchBucket, key, "application/octet-stream", nil, bytes.NewReader(content))
 			case op < 8: // 50% reads
 				key := fmt.Sprintf("preload-%d", i%100)
-				reader, _, err := storage.GetObject(key)
+				reader, _, err := storage.GetObject(benchBucket, key)
 				if err == nil {
 					_, _ = io.Copy(io.Discard, reader)
 					_ = reader.Close()
 				}
 			default: // 20% head
 				key := fmt.Sprintf("preload-%d", i%100)
-				_, _ = storage.HeadObject(key)
+				_, _ = storage.HeadObject(benchBucket, key)
 			}
 			i++
 		}

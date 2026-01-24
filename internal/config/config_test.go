@@ -167,14 +167,19 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
-	t.Run("missing bucket name", func(t *testing.T) {
+	t.Run("missing bucket name is allowed", func(t *testing.T) {
 		clearEnv()
 		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
 		os.Setenv("STUPID_RW_SECRET_KEY", "secret")
 
-		_, err := Load()
-		if err == nil {
-			t.Error("expected error for missing bucket name")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+
+		// Bucket name is optional - buckets can be created via API
+		if cfg.Bucket.Name != "" {
+			t.Errorf("Bucket.Name = %q, want empty", cfg.Bucket.Name)
 		}
 	})
 

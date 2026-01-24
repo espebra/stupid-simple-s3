@@ -14,6 +14,7 @@ import (
 
 	"github.com/espen/stupid-simple-s3/internal/api"
 	"github.com/espen/stupid-simple-s3/internal/config"
+	"github.com/espen/stupid-simple-s3/internal/metrics"
 	"github.com/espen/stupid-simple-s3/internal/storage"
 	"github.com/espen/stupid-simple-s3/internal/version"
 )
@@ -49,6 +50,24 @@ func main() {
 	if err != nil {
 		slog.Error("failed to initialize storage", "error", err)
 		os.Exit(1)
+	}
+
+	// Auto-create bucket at startup if configured
+	if cfg.Bucket.Name != "" {
+		err := store.CreateBucket(cfg.Bucket.Name)
+		if err != nil {
+			if err == storage.ErrBucketAlreadyExists {
+				slog.Info("bucket already exists", "bucket", cfg.Bucket.Name)
+				metrics.BucketsTotal.Inc()
+			} else {
+				slog.Error("failed to create bucket", "bucket", cfg.Bucket.Name, "error", err)
+				os.Exit(1)
+			}
+		} else {
+			slog.Info("created bucket", "bucket", cfg.Bucket.Name)
+			metrics.BucketCreationsTotal.Inc()
+			metrics.BucketsTotal.Inc()
+		}
 	}
 
 	// Start cleanup job if enabled

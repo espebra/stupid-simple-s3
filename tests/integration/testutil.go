@@ -74,6 +74,11 @@ func NewTestServer(t *testing.T) *TestServer {
 		t.Fatalf("failed to create storage: %v", err)
 	}
 
+	// Create the test bucket
+	if err := store.CreateBucket(TestBucket); err != nil {
+		t.Fatalf("failed to create test bucket: %v", err)
+	}
+
 	srv := api.NewServer(cfg, store)
 	testServer := httptest.NewServer(srv.Handler())
 

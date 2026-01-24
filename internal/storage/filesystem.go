@@ -19,6 +19,18 @@ import (
 // ErrInvalidKey is returned when an object key fails validation
 var ErrInvalidKey = errors.New("invalid object key")
 
+// ErrInvalidBucketName is returned when a bucket name fails validation
+var ErrInvalidBucketName = errors.New("invalid bucket name")
+
+// ErrBucketNotFound is returned when a bucket does not exist
+var ErrBucketNotFound = errors.New("bucket not found")
+
+// ErrBucketAlreadyExists is returned when trying to create a bucket that already exists
+var ErrBucketAlreadyExists = errors.New("bucket already exists")
+
+// ErrBucketNotEmpty is returned when trying to delete a non-empty bucket
+var ErrBucketNotEmpty = errors.New("bucket not empty")
+
 // ValidateKey checks that an object key is safe and doesn't contain path traversal sequences.
 // Returns an error if the key is invalid.
 func ValidateKey(key string) error {
@@ -62,6 +74,32 @@ func ValidateKey(key string) error {
 	return nil
 }
 
+// ValidateBucketName checks that a bucket name follows S3 naming rules.
+// Rules: 3-63 characters, lowercase letters, numbers, and hyphens only.
+// Must start and end with a letter or number.
+func ValidateBucketName(name string) error {
+	if len(name) < 3 || len(name) > 63 {
+		return fmt.Errorf("%w: bucket name must be between 3 and 63 characters", ErrInvalidBucketName)
+	}
+
+	for i, c := range name {
+		isLower := c >= 'a' && c <= 'z'
+		isDigit := c >= '0' && c <= '9'
+		isHyphen := c == '-'
+
+		if !isLower && !isDigit && !isHyphen {
+			return fmt.Errorf("%w: bucket name can only contain lowercase letters, numbers, and hyphens", ErrInvalidBucketName)
+		}
+
+		// First and last character must be letter or number
+		if (i == 0 || i == len(name)-1) && isHyphen {
+			return fmt.Errorf("%w: bucket name must start and end with a letter or number", ErrInvalidBucketName)
+		}
+	}
+
+	return nil
+}
+
 // FilesystemStorage implements Storage using the local filesystem
 type FilesystemStorage struct {
 	basePath      string
@@ -71,13 +109,13 @@ type FilesystemStorage struct {
 // NewFilesystemStorage creates a new filesystem-backed storage
 func NewFilesystemStorage(basePath, multipartPath string) (*FilesystemStorage, error) {
 	// Create base directories if they don't exist
-	objectsPath := filepath.Join(basePath, "objects")
-	if _, err := os.Stat(objectsPath); os.IsNotExist(err) {
-		if err := os.MkdirAll(objectsPath, 0700); err != nil {
-			return nil, fmt.Errorf("creating objects directory: %w", err)
+	bucketsPath := filepath.Join(basePath, "buckets")
+	if _, err := os.Stat(bucketsPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(bucketsPath, 0700); err != nil {
+			return nil, fmt.Errorf("creating buckets directory: %w", err)
 		}
 	} else if err != nil {
-		return nil, fmt.Errorf("checking objects directory: %w", err)
+		return nil, fmt.Errorf("checking buckets directory: %w", err)
 	}
 
 	if _, err := os.Stat(multipartPath); os.IsNotExist(err) {
@@ -94,11 +132,16 @@ func NewFilesystemStorage(basePath, multipartPath string) (*FilesystemStorage, e
 	}, nil
 }
 
-// keyToPath converts an object key to a filesystem path
-// Uses a 4-character hash prefix for directory distribution (65,536 buckets) and base64-encoded key
+// keyToPath converts an object key to a filesystem path within a bucket
+// Uses a 4-character hash prefix for directory distribution (65,536 directories) and base64-encoded key
 // Returns an error if the key is invalid or the resulting path would escape the base directory.
-func (fs *FilesystemStorage) keyToPath(key string) (string, error) {
-	// Validate the key first
+func (fs *FilesystemStorage) keyToPath(bucket, key string) (string, error) {
+	// Validate the bucket name
+	if err := ValidateBucketName(bucket); err != nil {
+		return "", err
+	}
+
+	// Validate the key
 	if err := ValidateKey(key); err != nil {
 		return "", err
 	}
@@ -110,7 +153,7 @@ func (fs *FilesystemStorage) keyToPath(key string) (string, error) {
 	// Base64 encode the key for safe filesystem storage
 	encodedKey := base64.URLEncoding.EncodeToString([]byte(key))
 
-	result := filepath.Join(fs.basePath, "objects", prefix, encodedKey)
+	result := filepath.Join(fs.basePath, "buckets", bucket, "objects", prefix, encodedKey)
 
 	// Defense in depth: verify the resulting path is within basePath
 	// First, resolve the base path (which should always exist)
@@ -125,7 +168,7 @@ func (fs *FilesystemStorage) keyToPath(key string) (string, error) {
 
 	// For the result path, we need to resolve what exists and verify the rest
 	// Since the full path may not exist yet, resolve from the base and append the relative part
-	relPath := filepath.Join("objects", prefix, encodedKey)
+	relPath := filepath.Join("buckets", bucket, "objects", prefix, encodedKey)
 	absResult := filepath.Join(absBase, relPath)
 
 	// If the result path exists (e.g., on read operations), verify via symlink resolution
@@ -144,9 +187,77 @@ func (fs *FilesystemStorage) keyToPath(key string) (string, error) {
 	return result, nil
 }
 
+// CreateBucket creates a new bucket
+func (fs *FilesystemStorage) CreateBucket(name string) error {
+	if err := ValidateBucketName(name); err != nil {
+		return err
+	}
+
+	bucketPath := filepath.Join(fs.basePath, "buckets", name, "objects")
+
+	// Check if bucket already exists
+	if _, err := os.Stat(bucketPath); err == nil {
+		return ErrBucketAlreadyExists
+	}
+
+	if err := os.MkdirAll(bucketPath, 0700); err != nil {
+		return fmt.Errorf("creating bucket directory: %w", err)
+	}
+
+	return nil
+}
+
+// BucketExists checks if a bucket exists
+func (fs *FilesystemStorage) BucketExists(name string) (bool, error) {
+	if err := ValidateBucketName(name); err != nil {
+		return false, err
+	}
+
+	bucketPath := filepath.Join(fs.basePath, "buckets", name, "objects")
+	_, err := os.Stat(bucketPath)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, fmt.Errorf("checking bucket existence: %w", err)
+}
+
+// DeleteBucket deletes a bucket (must be empty)
+func (fs *FilesystemStorage) DeleteBucket(name string) error {
+	if err := ValidateBucketName(name); err != nil {
+		return err
+	}
+
+	bucketPath := filepath.Join(fs.basePath, "buckets", name)
+	objectsPath := filepath.Join(bucketPath, "objects")
+
+	// Check if bucket exists
+	if _, err := os.Stat(objectsPath); os.IsNotExist(err) {
+		return ErrBucketNotFound
+	}
+
+	// Check if bucket is empty by looking for any files in objects directory
+	entries, err := os.ReadDir(objectsPath)
+	if err != nil {
+		return fmt.Errorf("reading bucket contents: %w", err)
+	}
+	if len(entries) > 0 {
+		return ErrBucketNotEmpty
+	}
+
+	// Remove the bucket directory
+	if err := os.RemoveAll(bucketPath); err != nil {
+		return fmt.Errorf("removing bucket directory: %w", err)
+	}
+
+	return nil
+}
+
 // PutObject stores an object with the given key
-func (fs *FilesystemStorage) PutObject(key string, contentType string, metadata map[string]string, body io.Reader) (*s3.ObjectMetadata, error) {
-	objPath, err := fs.keyToPath(key)
+func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, metadata map[string]string, body io.Reader) (*s3.ObjectMetadata, error) {
+	objPath, err := fs.keyToPath(bucket, key)
 	if err != nil {
 		return nil, err
 	}
@@ -215,15 +326,15 @@ func (fs *FilesystemStorage) PutObject(key string, contentType string, metadata 
 }
 
 // GetObject retrieves an object by key
-func (fs *FilesystemStorage) GetObject(key string) (io.ReadCloser, *s3.ObjectMetadata, error) {
-	objPath, err := fs.keyToPath(key)
+func (fs *FilesystemStorage) GetObject(bucket, key string) (io.ReadCloser, *s3.ObjectMetadata, error) {
+	objPath, err := fs.keyToPath(bucket, key)
 	if err != nil {
 		return nil, nil, err
 	}
 	dataPath := filepath.Join(objPath, "data")
 
 	// Get metadata first
-	meta, err := fs.HeadObject(key)
+	meta, err := fs.HeadObject(bucket, key)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -241,8 +352,8 @@ func (fs *FilesystemStorage) GetObject(key string) (io.ReadCloser, *s3.ObjectMet
 }
 
 // HeadObject retrieves object metadata without the body
-func (fs *FilesystemStorage) HeadObject(key string) (*s3.ObjectMetadata, error) {
-	objPath, err := fs.keyToPath(key)
+func (fs *FilesystemStorage) HeadObject(bucket, key string) (*s3.ObjectMetadata, error) {
+	objPath, err := fs.keyToPath(bucket, key)
 	if err != nil {
 		return nil, err
 	}
@@ -266,8 +377,8 @@ func (fs *FilesystemStorage) HeadObject(key string) (*s3.ObjectMetadata, error) 
 }
 
 // DeleteObject removes an object by key
-func (fs *FilesystemStorage) DeleteObject(key string) error {
-	objPath, err := fs.keyToPath(key)
+func (fs *FilesystemStorage) DeleteObject(bucket, key string) error {
+	objPath, err := fs.keyToPath(bucket, key)
 	if err != nil {
 		return err
 	}
@@ -286,8 +397,8 @@ func (fs *FilesystemStorage) DeleteObject(key string) error {
 }
 
 // ObjectExists checks if an object exists
-func (fs *FilesystemStorage) ObjectExists(key string) (bool, error) {
-	objPath, err := fs.keyToPath(key)
+func (fs *FilesystemStorage) ObjectExists(bucket, key string) (bool, error) {
+	objPath, err := fs.keyToPath(bucket, key)
 	if err != nil {
 		return false, err
 	}
@@ -304,15 +415,15 @@ func (fs *FilesystemStorage) ObjectExists(key string) (bool, error) {
 }
 
 // GetObjectRange retrieves a range of bytes from an object
-func (fs *FilesystemStorage) GetObjectRange(key string, start, end int64) (io.ReadCloser, *s3.ObjectMetadata, error) {
-	objPath, err := fs.keyToPath(key)
+func (fs *FilesystemStorage) GetObjectRange(bucket, key string, start, end int64) (io.ReadCloser, *s3.ObjectMetadata, error) {
+	objPath, err := fs.keyToPath(bucket, key)
 	if err != nil {
 		return nil, nil, err
 	}
 	dataPath := filepath.Join(objPath, "data")
 
 	// Get metadata first
-	meta, err := fs.HeadObject(key)
+	meta, err := fs.HeadObject(bucket, key)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -368,7 +479,11 @@ func (l *limitedReadCloser) Close() error {
 }
 
 // ListObjects lists objects with optional prefix, delimiter, and pagination
-func (fs *FilesystemStorage) ListObjects(opts ListObjectsOptions) (*ListObjectsResult, error) {
+func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions) (*ListObjectsResult, error) {
+	if err := ValidateBucketName(bucket); err != nil {
+		return nil, err
+	}
+
 	if opts.MaxKeys <= 0 {
 		opts.MaxKeys = 1000
 	}
@@ -376,7 +491,7 @@ func (fs *FilesystemStorage) ListObjects(opts ListObjectsOptions) (*ListObjectsR
 		opts.MaxKeys = 1000
 	}
 
-	objectsPath := filepath.Join(fs.basePath, "objects")
+	objectsPath := filepath.Join(fs.basePath, "buckets", bucket, "objects")
 	var allObjects []s3.ObjectMetadata
 
 	// Walk through all hash prefix directories
@@ -473,16 +588,16 @@ func (fs *FilesystemStorage) ListObjects(opts ListObjectsOptions) (*ListObjectsR
 }
 
 // CopyObject copies an object from source key to destination key
-func (fs *FilesystemStorage) CopyObject(srcKey, dstKey string) (*s3.ObjectMetadata, error) {
+func (fs *FilesystemStorage) CopyObject(srcBucket, srcKey, dstBucket, dstKey string) (*s3.ObjectMetadata, error) {
 	// Get source object
-	srcReader, srcMeta, err := fs.GetObject(srcKey)
+	srcReader, srcMeta, err := fs.GetObject(srcBucket, srcKey)
 	if err != nil {
 		return nil, err
 	}
 	defer srcReader.Close()
 
 	// Copy to destination
-	dstMeta, err := fs.PutObject(dstKey, srcMeta.ContentType, srcMeta.UserMetadata, srcReader)
+	dstMeta, err := fs.PutObject(dstBucket, dstKey, srcMeta.ContentType, srcMeta.UserMetadata, srcReader)
 	if err != nil {
 		return nil, fmt.Errorf("copying object: %w", err)
 	}

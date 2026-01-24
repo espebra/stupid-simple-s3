@@ -51,6 +51,8 @@ func (s *Server) setupRoutes() {
 	// Bucket operations
 	s.mux.Handle("HEAD /{bucket}", MetricsMiddleware(authMiddleware(http.HandlerFunc(s.handlers.HeadBucket))))
 	s.mux.Handle("GET /{bucket}", MetricsMiddleware(authMiddleware(http.HandlerFunc(s.handlers.GetBucket))))
+	s.mux.Handle("PUT /{bucket}", MetricsMiddleware(authMiddleware(RequireWritePrivilege(http.HandlerFunc(s.handlers.CreateBucket)))))
+	s.mux.Handle("DELETE /{bucket}", MetricsMiddleware(authMiddleware(RequireWritePrivilege(http.HandlerFunc(s.handlers.DeleteBucket)))))
 	s.mux.Handle("POST /{bucket}", MetricsMiddleware(authMiddleware(RequireWritePrivilege(http.HandlerFunc(s.handlers.PostBucket)))))
 
 	// Object operations (read)

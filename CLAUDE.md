@@ -4,7 +4,8 @@ Stupid Simple S3 is a simple S3 service designed to be efficient and performant 
 
 - All configuration is done using environment variables.
 - AWSv4 signatures are supported from the client.
-- Multi part uploads are supported.
+- Multi-bucket support via S3 CreateBucket/DeleteBucket API.
+- Multipart uploads are supported.
 
 
 Scope:

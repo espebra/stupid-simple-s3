@@ -27,36 +27,49 @@ type ListObjectsResult struct {
 // Storage defines the interface for object storage operations
 type Storage interface {
 	// PutObject stores an object with the given key
-	PutObject(key string, contentType string, metadata map[string]string, body io.Reader) (*s3.ObjectMetadata, error)
+	PutObject(bucket, key string, contentType string, metadata map[string]string, body io.Reader) (*s3.ObjectMetadata, error)
 
 	// GetObject retrieves an object by key
-	GetObject(key string) (io.ReadCloser, *s3.ObjectMetadata, error)
+	GetObject(bucket, key string) (io.ReadCloser, *s3.ObjectMetadata, error)
 
 	// GetObjectRange retrieves a range of bytes from an object
-	GetObjectRange(key string, start, end int64) (io.ReadCloser, *s3.ObjectMetadata, error)
+	GetObjectRange(bucket, key string, start, end int64) (io.ReadCloser, *s3.ObjectMetadata, error)
 
 	// HeadObject retrieves object metadata without the body
-	HeadObject(key string) (*s3.ObjectMetadata, error)
+	HeadObject(bucket, key string) (*s3.ObjectMetadata, error)
 
 	// DeleteObject removes an object by key
-	DeleteObject(key string) error
+	DeleteObject(bucket, key string) error
 
 	// ObjectExists checks if an object exists
-	ObjectExists(key string) (bool, error)
+	ObjectExists(bucket, key string) (bool, error)
 
 	// ListObjects lists objects with optional prefix, delimiter, and pagination
-	ListObjects(opts ListObjectsOptions) (*ListObjectsResult, error)
+	ListObjects(bucket string, opts ListObjectsOptions) (*ListObjectsResult, error)
 
 	// CopyObject copies an object from source key to destination key
-	CopyObject(srcKey, dstKey string) (*s3.ObjectMetadata, error)
+	CopyObject(srcBucket, srcKey, dstBucket, dstKey string) (*s3.ObjectMetadata, error)
+}
+
+// BucketStorage defines the interface for bucket operations
+type BucketStorage interface {
+	// CreateBucket creates a new bucket
+	CreateBucket(name string) error
+
+	// DeleteBucket deletes a bucket (must be empty)
+	DeleteBucket(name string) error
+
+	// BucketExists checks if a bucket exists
+	BucketExists(name string) (bool, error)
 }
 
 // MultipartStorage defines the interface for multipart upload operations
 type MultipartStorage interface {
 	Storage
+	BucketStorage
 
 	// CreateMultipartUpload initializes a new multipart upload
-	CreateMultipartUpload(key string, contentType string, metadata map[string]string) (uploadID string, err error)
+	CreateMultipartUpload(bucket, key string, contentType string, metadata map[string]string) (uploadID string, err error)
 
 	// UploadPart stores a part of a multipart upload
 	UploadPart(uploadID string, partNumber int, body io.Reader) (*s3.PartMetadata, error)

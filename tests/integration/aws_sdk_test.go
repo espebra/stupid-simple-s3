@@ -14,6 +14,168 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
+// TestAWSSDK_CreateBucket tests bucket creation
+func TestAWSSDK_CreateBucket(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	ctx := context.Background()
+	client := ts.AWSClient(ctx)
+
+	t.Run("create new bucket", func(t *testing.T) {
+		bucketName := "new-aws-bucket"
+		_, err := client.CreateBucket(ctx, &s3.CreateBucketInput{
+			Bucket: aws.String(bucketName),
+		})
+		if err != nil {
+			t.Fatalf("CreateBucket failed: %v", err)
+		}
+
+		// Verify bucket exists
+		_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
+			Bucket: aws.String(bucketName),
+		})
+		if err != nil {
+			t.Fatalf("HeadBucket after create failed: %v", err)
+		}
+	})
+
+	t.Run("create existing bucket returns error", func(t *testing.T) {
+		// TestBucket is already created
+		_, err := client.CreateBucket(ctx, &s3.CreateBucketInput{
+			Bucket: aws.String(TestBucket),
+		})
+		if err == nil {
+			t.Fatal("expected error when creating existing bucket")
+		}
+		if !strings.Contains(err.Error(), "BucketAlreadyOwnedByYou") && !strings.Contains(err.Error(), "409") {
+			t.Errorf("expected BucketAlreadyOwnedByYou error, got: %v", err)
+		}
+	})
+
+	t.Run("create bucket with invalid name", func(t *testing.T) {
+		_, err := client.CreateBucket(ctx, &s3.CreateBucketInput{
+			Bucket: aws.String("INVALID"),
+		})
+		if err == nil {
+			t.Fatal("expected error for invalid bucket name")
+		}
+	})
+
+	t.Run("read-only credentials cannot create bucket", func(t *testing.T) {
+		roClient := ts.AWSClientWithCreds(ctx, ReadOnlyAccessKeyID, ReadOnlySecretAccessKey)
+		_, err := roClient.CreateBucket(ctx, &s3.CreateBucketInput{
+			Bucket: aws.String("should-fail-bucket"),
+		})
+		if err == nil {
+			t.Fatal("expected error with read-only credentials")
+		}
+	})
+}
+
+// TestAWSSDK_DeleteBucket tests bucket deletion
+func TestAWSSDK_DeleteBucket(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	ctx := context.Background()
+	client := ts.AWSClient(ctx)
+
+	t.Run("delete empty bucket", func(t *testing.T) {
+		bucketName := "delete-me-aws"
+
+		// Create bucket
+		_, err := client.CreateBucket(ctx, &s3.CreateBucketInput{
+			Bucket: aws.String(bucketName),
+		})
+		if err != nil {
+			t.Fatalf("CreateBucket failed: %v", err)
+		}
+
+		// Delete bucket
+		_, err = client.DeleteBucket(ctx, &s3.DeleteBucketInput{
+			Bucket: aws.String(bucketName),
+		})
+		if err != nil {
+			t.Fatalf("DeleteBucket failed: %v", err)
+		}
+
+		// Verify bucket no longer exists
+		_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
+			Bucket: aws.String(bucketName),
+		})
+		if err == nil {
+			t.Fatal("expected error for deleted bucket")
+		}
+	})
+
+	t.Run("delete non-empty bucket fails", func(t *testing.T) {
+		bucketName := "nonempty-aws-bucket"
+
+		// Create bucket
+		_, err := client.CreateBucket(ctx, &s3.CreateBucketInput{
+			Bucket: aws.String(bucketName),
+		})
+		if err != nil {
+			t.Fatalf("CreateBucket failed: %v", err)
+		}
+
+		// Add an object
+		_, err = client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket: aws.String(bucketName),
+			Key:    aws.String("test-file.txt"),
+			Body:   bytes.NewReader([]byte("content")),
+		})
+		if err != nil {
+			t.Fatalf("PutObject failed: %v", err)
+		}
+
+		// Try to delete - should fail
+		_, err = client.DeleteBucket(ctx, &s3.DeleteBucketInput{
+			Bucket: aws.String(bucketName),
+		})
+		if err == nil {
+			t.Fatal("expected error when deleting non-empty bucket")
+		}
+		if !strings.Contains(err.Error(), "BucketNotEmpty") && !strings.Contains(err.Error(), "409") {
+			t.Errorf("expected BucketNotEmpty error, got: %v", err)
+		}
+	})
+
+	t.Run("delete non-existent bucket fails", func(t *testing.T) {
+		_, err := client.DeleteBucket(ctx, &s3.DeleteBucketInput{
+			Bucket: aws.String("nonexistent-aws-bucket"),
+		})
+		if err == nil {
+			t.Fatal("expected error for non-existent bucket")
+		}
+		if !strings.Contains(err.Error(), "NoSuchBucket") && !strings.Contains(err.Error(), "404") {
+			t.Errorf("expected NoSuchBucket error, got: %v", err)
+		}
+	})
+
+	t.Run("read-only credentials cannot delete bucket", func(t *testing.T) {
+		bucketName := "ro-delete-test"
+
+		// Create bucket with RW creds
+		_, err := client.CreateBucket(ctx, &s3.CreateBucketInput{
+			Bucket: aws.String(bucketName),
+		})
+		if err != nil {
+			t.Fatalf("CreateBucket failed: %v", err)
+		}
+
+		// Try to delete with RO creds
+		roClient := ts.AWSClientWithCreds(ctx, ReadOnlyAccessKeyID, ReadOnlySecretAccessKey)
+		_, err = roClient.DeleteBucket(ctx, &s3.DeleteBucketInput{
+			Bucket: aws.String(bucketName),
+		})
+		if err == nil {
+			t.Fatal("expected error with read-only credentials")
+		}
+	})
+}
+
 // TestAWSSDK_HeadBucket tests bucket existence check
 func TestAWSSDK_HeadBucket(t *testing.T) {
 	ts := NewTestServer(t)
