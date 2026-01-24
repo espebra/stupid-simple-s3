@@ -5,9 +5,20 @@ import "runtime/debug"
 // Version is set at build time via ldflags (git tag)
 var Version = "dev"
 
+// Commit is set at build time via ldflags (git commit hash)
+var Commit = ""
+
 // String returns the version string in the format "version (commit)"
 func String() string {
-	commit, dirty := getBuildInfo()
+	// Prefer ldflags-injected commit, fall back to build info
+	commit := Commit
+	if len(commit) > 7 {
+		commit = commit[:7]
+	}
+	dirty := false
+	if commit == "" {
+		commit, dirty = getBuildInfo()
+	}
 
 	if Version == "dev" {
 		if commit != "" {
