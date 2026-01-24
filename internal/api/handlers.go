@@ -24,19 +24,46 @@ const maxKeysLimit = 1000
 // ErrInvalidMetadata is returned when metadata contains invalid characters
 var ErrInvalidMetadata = errors.New("invalid metadata")
 
+// drainRequestBody discards remaining request body to prevent connection hangs.
+// Should be called on error paths where the body may not have been fully consumed.
+func drainRequestBody(r *http.Request) {
+	if r.Body != nil {
+		_, _ = io.Copy(io.Discard, r.Body)
+	}
+}
+
+// isASCIIPrintable checks if a byte is ASCII printable (space through tilde)
+func isASCIIPrintable(c byte) bool {
+	return c >= 0x20 && c <= 0x7E
+}
+
 // validateMetadataValue checks that a metadata value doesn't contain characters
 // that could be used for header injection attacks (CRLF injection).
+// Values must be ASCII printable characters only.
 func validateMetadataValue(value string) error {
-	if strings.ContainsAny(value, "\r\n\x00") {
-		return ErrInvalidMetadata
+	for i := 0; i < len(value); i++ {
+		if !isASCIIPrintable(value[i]) {
+			return ErrInvalidMetadata
+		}
 	}
 	return nil
 }
 
 // validateMetadataKey checks that a metadata key is valid.
+// Keys must be ASCII printable characters only (lowercase letters, numbers, hyphens).
 func validateMetadataKey(key string) error {
-	if strings.ContainsAny(key, "\r\n\x00") {
+	if key == "" {
 		return ErrInvalidMetadata
+	}
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		// Allow lowercase letters, numbers, and hyphens (already lowercased by caller)
+		isLower := c >= 'a' && c <= 'z'
+		isDigit := c >= '0' && c <= '9'
+		isHyphen := c == '-'
+		if !isLower && !isDigit && !isHyphen {
+			return ErrInvalidMetadata
+		}
 	}
 	return nil
 }
