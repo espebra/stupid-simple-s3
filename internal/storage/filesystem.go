@@ -289,6 +289,20 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 		return nil, fmt.Errorf("creating object directory: %w", err)
 	}
 
+	// Defense in depth: verify created directory is within base path (catches symlink attacks)
+	realObjPath, err := filepath.EvalSymlinks(objPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolving object path: %w", err)
+	}
+	absBase, _ := filepath.Abs(fs.basePath)
+	if realBase, err := filepath.EvalSymlinks(absBase); err == nil {
+		absBase = realBase
+	}
+	if !strings.HasPrefix(realObjPath, absBase+string(filepath.Separator)) {
+		os.RemoveAll(objPath) // Clean up potentially dangerous directory
+		return nil, fmt.Errorf("%w: path escapes base directory via symlink", ErrInvalidKey)
+	}
+
 	// Write data to a temp file first, then rename
 	tmpPath := dataPath + ".tmp"
 	tmpFile, err := os.Create(tmpPath)
