@@ -1320,7 +1320,7 @@ func TestAccessLogMiddleware(t *testing.T) {
 	})
 
 	t.Run("logs request and passes through", func(t *testing.T) {
-		handler := AccessLogMiddleware(dummyHandler)
+		handler := AccessLogMiddleware(nil)(dummyHandler)
 
 		req := httptest.NewRequest("GET", "/test", nil)
 		w := httptest.NewRecorder()
@@ -1335,8 +1335,9 @@ func TestAccessLogMiddleware(t *testing.T) {
 		}
 	})
 
-	t.Run("extracts client IP from X-Forwarded-For", func(t *testing.T) {
-		handler := AccessLogMiddleware(dummyHandler)
+	t.Run("extracts client IP from X-Forwarded-For when trusted", func(t *testing.T) {
+		// httptest.NewRequest sets RemoteAddr to "192.0.2.1:1234"
+		handler := AccessLogMiddleware([]string{"192.0.2.1"})(dummyHandler)
 
 		req := httptest.NewRequest("GET", "/test", nil)
 		req.Header.Set("X-Forwarded-For", "192.168.1.100, 10.0.0.1")
@@ -1349,8 +1350,9 @@ func TestAccessLogMiddleware(t *testing.T) {
 		}
 	})
 
-	t.Run("extracts client IP from X-Real-IP", func(t *testing.T) {
-		handler := AccessLogMiddleware(dummyHandler)
+	t.Run("extracts client IP from X-Real-IP when trusted", func(t *testing.T) {
+		// httptest.NewRequest sets RemoteAddr to "192.0.2.1:1234"
+		handler := AccessLogMiddleware([]string{"192.0.2.1"})(dummyHandler)
 
 		req := httptest.NewRequest("GET", "/test", nil)
 		req.Header.Set("X-Real-IP", "192.168.1.100")
