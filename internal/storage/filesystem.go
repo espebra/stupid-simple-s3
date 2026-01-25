@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/espen/stupid-simple-s3/internal/s3"
 )
 
@@ -304,7 +306,9 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 	}
 
 	// Write data to a temp file first, then rename
-	tmpPath := dataPath + ".tmp"
+	// Use unique temp file name to avoid conflicts with concurrent writes to same key
+	tmpID := uuid.New().String()
+	tmpPath := dataPath + ".tmp." + tmpID
 	tmpFile, err := os.Create(tmpPath)
 	if err != nil {
 		return nil, fmt.Errorf("creating temp file: %w", err)
@@ -345,15 +349,27 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 		UserMetadata: metadata,
 	}
 
-	// Write metadata
-	metaFile, err := os.Create(metaPath)
+	// Write metadata atomically using temp file and rename
+	metaTmpPath := metaPath + ".tmp." + tmpID
+	metaFile, err := os.Create(metaTmpPath)
 	if err != nil {
 		return nil, fmt.Errorf("creating metadata file: %w", err)
 	}
-	defer metaFile.Close()
 
 	if err := json.NewEncoder(metaFile).Encode(objMeta); err != nil {
+		metaFile.Close()
+		os.Remove(metaTmpPath)
 		return nil, fmt.Errorf("writing metadata: %w", err)
+	}
+
+	if err := metaFile.Close(); err != nil {
+		os.Remove(metaTmpPath)
+		return nil, fmt.Errorf("closing metadata file: %w", err)
+	}
+
+	if err := os.Rename(metaTmpPath, metaPath); err != nil {
+		os.Remove(metaTmpPath)
+		return nil, fmt.Errorf("renaming metadata file: %w", err)
 	}
 
 	return objMeta, nil
