@@ -167,6 +167,17 @@ Presigned URL parameters:
 | CompleteMultipartUpload | POST | `/{bucket}/{key}?uploadId=X` |
 | AbortMultipartUpload | DELETE | `/{bucket}/{key}?uploadId=X` |
 
+## Health Checks
+
+Health check endpoints are available for container orchestration:
+
+| Endpoint | Description |
+|----------|-------------|
+| `/healthz` | Liveness probe - returns 200 OK if the server is running |
+| `/readyz` | Readiness probe - returns 200 OK if the server is ready to accept requests |
+
+These endpoints do not require authentication.
+
 ## Metrics
 
 Prometheus metrics are available at `/metrics`. By default, no authentication is required. To enable basic authentication, set both `STUPID_METRICS_USERNAME` and `STUPID_METRICS_PASSWORD` environment variables.

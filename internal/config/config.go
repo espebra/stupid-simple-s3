@@ -117,7 +117,7 @@ type Config struct {
 // Environment variables:
 //   - STUPID_HOST: Listen host (default: all interfaces)
 //   - STUPID_PORT: Listen port (default: "5553")
-//   - STUPID_BUCKET_NAME: Bucket name (required)
+//   - STUPID_BUCKET_NAME: Bucket name to auto-create at startup (optional)
 //   - STUPID_STORAGE_PATH: Storage path (default: "/var/lib/stupid-simple-s3/data")
 //   - STUPID_MULTIPART_PATH: Multipart storage path (default: "/var/lib/stupid-simple-s3/tmp")
 //   - STUPID_CLEANUP_ENABLED: Enable cleanup job (default: "true")
