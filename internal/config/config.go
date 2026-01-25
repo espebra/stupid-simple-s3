@@ -37,7 +37,6 @@ type Limits struct {
 	MaxPartSize   int64 // Maximum size of a single multipart part in bytes (0 = unlimited)
 }
 
-
 // DefaultMaxObjectSize is 5GB (S3's maximum for single PUT)
 const DefaultMaxObjectSize = 5 * 1024 * 1024 * 1024
 

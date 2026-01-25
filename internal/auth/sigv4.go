@@ -227,11 +227,11 @@ func (s *SignatureV4) buildCanonicalQueryString(query url.Values) string {
 
 // ipHeaders lists headers that should contain valid IP addresses
 var ipHeaders = map[string]bool{
-	"client-ip":       true,
-	"x-client-ip":     true,
-	"x-forwarded-for": true,
-	"x-real-ip":       true,
-	"true-client-ip":  true,
+	"client-ip":        true,
+	"x-client-ip":      true,
+	"x-forwarded-for":  true,
+	"x-real-ip":        true,
+	"true-client-ip":   true,
 	"cf-connecting-ip": true,
 }
 
