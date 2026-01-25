@@ -385,6 +385,15 @@ func (s *SignatureV4) ParsePresignedURL(r *http.Request) (*ParsedPresignedURL, e
 	if signature == "" {
 		return nil, fmt.Errorf("missing X-Amz-Signature")
 	}
+	// Validate signature is 64-character hex string (SHA256-HMAC = 256 bits = 64 hex chars)
+	if len(signature) != 64 {
+		return nil, fmt.Errorf("invalid X-Amz-Signature length: expected 64, got %d", len(signature))
+	}
+	for _, c := range signature {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return nil, fmt.Errorf("invalid X-Amz-Signature: not a valid hex string")
+		}
+	}
 
 	return &ParsedPresignedURL{
 		Algorithm:     algorithm,
