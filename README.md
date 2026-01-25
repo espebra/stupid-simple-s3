@@ -40,7 +40,7 @@ The service is configured using environment variables:
 | `STUPID_METRICS_PASSWORD` | Password for /metrics basic auth | (optional) |
 | `STUPID_MAX_OBJECT_SIZE` | Maximum object size in bytes | `5368709120` (5GB) |
 | `STUPID_MAX_PART_SIZE` | Maximum multipart part size in bytes | `5368709120` (5GB) |
-| `STUPID_TRUSTED_PROXIES` | Comma-separated list of trusted proxy IPs/CIDRs | (optional) |
+| `STUPID_TRUSTED_PROXIES` | Comma-separated list of trusted proxy IPs/CIDRs for X-Forwarded-For | (optional) |
 | `STUPID_READ_TIMEOUT` | Maximum duration for reading requests | `30m` |
 | `STUPID_WRITE_TIMEOUT` | Maximum duration for writing responses | `30m` |
 | `STUPID_LOG_FORMAT` | Log output format (`text` or `json`) | `text` |
@@ -266,7 +266,12 @@ export STUPID_TRUSTED_PROXIES="127.0.0.1"
 export STUPID_TRUSTED_PROXIES="127.0.0.1,10.0.0.0/8,192.168.1.0/24"
 ```
 
-Without this configuration, the service ignores `X-Forwarded-For` and `X-Real-IP` headers for security.
+When `STUPID_TRUSTED_PROXIES` is configured and a request arrives from one of the trusted IPs:
+- The `X-Forwarded-For` header is checked first; the first IP in the list (the original client) is used
+- If `X-Forwarded-For` is not present, `X-Real-IP` is used instead
+- The extracted client IP appears in access logs instead of the proxy's IP
+
+Without this configuration, the service ignores `X-Forwarded-For` and `X-Real-IP` headers for security, and access logs will show the proxy's IP address.
 
 Example Varnish VCL configuration (use with [hitch](https://github.com/varnish/hitch) for TLS termination):
 
