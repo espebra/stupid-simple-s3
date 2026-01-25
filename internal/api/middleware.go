@@ -204,6 +204,19 @@ func AccessLogMiddleware(next http.Handler) http.Handler {
 		duration := time.Since(start)
 		clientIP := getClientIP(r)
 		requestID := GetRequestID(r)
+
+		// Log health and metrics endpoints at debug level to reduce noise
+		if isInternalEndpoint(r.URL.Path) {
+			slog.Debug("request",
+				"client_ip", clientIP,
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", rw.statusCode,
+				"duration", duration.String(),
+			)
+			return
+		}
+
 		operation := getOperationFromContext(r)
 
 		slog.Info("request",
@@ -218,6 +231,11 @@ func AccessLogMiddleware(next http.Handler) http.Handler {
 			"operation", operation,
 		)
 	})
+}
+
+// isInternalEndpoint returns true for health check and metrics endpoints
+func isInternalEndpoint(path string) bool {
+	return path == "/healthz" || path == "/readyz" || path == "/metrics"
 }
 
 // getClientIP extracts the client IP from the request
