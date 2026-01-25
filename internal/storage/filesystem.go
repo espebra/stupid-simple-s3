@@ -483,6 +483,11 @@ func (fs *FilesystemStorage) GetObjectRange(bucket, key string, start, end int64
 		return nil, nil, err
 	}
 
+	// Handle empty files - no valid range exists
+	if meta.Size == 0 {
+		return nil, nil, fmt.Errorf("invalid range: object is empty")
+	}
+
 	// Validate range
 	if start < 0 {
 		start = 0
