@@ -349,13 +349,12 @@ func getErrorCodeFromStatus(status int) string {
 // AuthMiddleware creates middleware that verifies AWS Signature v4 authentication
 func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 	sigv4 := &auth.SignatureV4{}
-	proxyChecker := newTrustedProxyChecker(cfg.Server.TrustedProxies)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Check if this is a presigned URL request
 			if auth.IsPresignedRequest(r) {
-				handlePresignedAuth(w, r, cfg, sigv4, proxyChecker, next)
+				handlePresignedAuth(w, r, cfg, sigv4, next)
 				return
 			}
 
@@ -408,7 +407,7 @@ func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 }
 
 // handlePresignedAuth handles authentication for presigned URL requests
-func handlePresignedAuth(w http.ResponseWriter, r *http.Request, cfg *config.Config, sigv4 *auth.SignatureV4, proxyChecker *trustedProxyChecker, next http.Handler) {
+func handlePresignedAuth(w http.ResponseWriter, r *http.Request, cfg *config.Config, sigv4 *auth.SignatureV4, next http.Handler) {
 	// Get access key ID from presigned URL
 	accessKeyID := auth.GetPresignedAccessKeyID(r)
 	if accessKeyID == "" {
