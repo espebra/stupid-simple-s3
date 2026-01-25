@@ -38,7 +38,7 @@ func TestParseAuthorization(t *testing.T) {
 		},
 		{
 			name:       "invalid algorithm",
-			authHeader: "AWS4-HMAC-SHA512 Credential=AKIAIOSFODNN7EXAMPLE/20230101/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=abc123",
+			authHeader: "AWS4-HMAC-SHA512 Credential=AKIAIOSFODNN7EXAMPLE/20230101/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 			wantErr:    true,
 		},
 		{
@@ -200,7 +200,7 @@ func TestVerifyRequest(t *testing.T) {
 
 	t.Run("missing x-amz-date header", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/my-bucket/test.txt", nil)
-		req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/"+dateStamp+"/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abc123")
+		req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/"+dateStamp+"/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 		_, err := sigv4.VerifyRequest(req, secretKey)
 		if err == nil {
 			t.Error("expected error for missing X-Amz-Date header")
@@ -213,7 +213,7 @@ func TestVerifyRequest(t *testing.T) {
 		oldAmzDate := oldTime.Format(TimeFormat)
 		oldDateStamp := oldTime.Format(DateFormat)
 
-		req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/"+oldDateStamp+"/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abc123")
+		req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/"+oldDateStamp+"/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 		req.Header.Set("X-Amz-Date", oldAmzDate)
 
 		_, err := sigv4.VerifyRequest(req, secretKey)
@@ -441,7 +441,7 @@ func TestIsPresignedRequest(t *testing.T) {
 	}{
 		{
 			name:   "presigned request",
-			query:  "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE/20230101/us-east-1/s3/aws4_request&X-Amz-Signature=abc123",
+			query:  "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE/20230101/us-east-1/s3/aws4_request&X-Amz-Signature=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 			expect: true,
 		},
 		{
@@ -476,7 +476,7 @@ func TestParsePresignedURL(t *testing.T) {
 	sigv4 := &SignatureV4{}
 
 	t.Run("valid presigned URL", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/my-bucket/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE/20230101/us-east-1/s3/aws4_request&X-Amz-Date=20230101T120000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=abc123", nil)
+		req := httptest.NewRequest("GET", "/my-bucket/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE/20230101/us-east-1/s3/aws4_request&X-Amz-Date=20230101T120000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", nil)
 		parsed, err := sigv4.ParsePresignedURL(req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -497,7 +497,7 @@ func TestParsePresignedURL(t *testing.T) {
 	})
 
 	t.Run("invalid algorithm", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/my-bucket/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA512&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE/20230101/us-east-1/s3/aws4_request&X-Amz-Date=20230101T120000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=abc123", nil)
+		req := httptest.NewRequest("GET", "/my-bucket/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA512&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE/20230101/us-east-1/s3/aws4_request&X-Amz-Date=20230101T120000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", nil)
 		_, err := sigv4.ParsePresignedURL(req)
 		if err == nil {
 			t.Error("expected error for invalid algorithm")
@@ -505,7 +505,7 @@ func TestParsePresignedURL(t *testing.T) {
 	})
 
 	t.Run("invalid credential format", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/my-bucket/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE/20230101&X-Amz-Date=20230101T120000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=abc123", nil)
+		req := httptest.NewRequest("GET", "/my-bucket/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE/20230101&X-Amz-Date=20230101T120000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", nil)
 		_, err := sigv4.ParsePresignedURL(req)
 		if err == nil {
 			t.Error("expected error for invalid credential format")
@@ -513,7 +513,7 @@ func TestParsePresignedURL(t *testing.T) {
 	})
 
 	t.Run("invalid expires", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/my-bucket/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE/20230101/us-east-1/s3/aws4_request&X-Amz-Date=20230101T120000Z&X-Amz-Expires=invalid&X-Amz-SignedHeaders=host&X-Amz-Signature=abc123", nil)
+		req := httptest.NewRequest("GET", "/my-bucket/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE/20230101/us-east-1/s3/aws4_request&X-Amz-Date=20230101T120000Z&X-Amz-Expires=invalid&X-Amz-SignedHeaders=host&X-Amz-Signature=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", nil)
 		_, err := sigv4.ParsePresignedURL(req)
 		if err == nil {
 			t.Error("expected error for invalid expires")
@@ -521,7 +521,7 @@ func TestParsePresignedURL(t *testing.T) {
 	})
 
 	t.Run("expires too large", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/my-bucket/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE/20230101/us-east-1/s3/aws4_request&X-Amz-Date=20230101T120000Z&X-Amz-Expires=999999999&X-Amz-SignedHeaders=host&X-Amz-Signature=abc123", nil)
+		req := httptest.NewRequest("GET", "/my-bucket/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE/20230101/us-east-1/s3/aws4_request&X-Amz-Date=20230101T120000Z&X-Amz-Expires=999999999&X-Amz-SignedHeaders=host&X-Amz-Signature=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", nil)
 		_, err := sigv4.ParsePresignedURL(req)
 		if err == nil {
 			t.Error("expected error for expires too large")
@@ -529,7 +529,7 @@ func TestParsePresignedURL(t *testing.T) {
 	})
 
 	t.Run("missing X-Amz-Date", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/my-bucket/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE/20230101/us-east-1/s3/aws4_request&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=abc123", nil)
+		req := httptest.NewRequest("GET", "/my-bucket/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE/20230101/us-east-1/s3/aws4_request&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", nil)
 		_, err := sigv4.ParsePresignedURL(req)
 		if err == nil {
 			t.Error("expected error for missing X-Amz-Date")
@@ -672,7 +672,7 @@ func TestVerifyPresignedRequest(t *testing.T) {
 			"&X-Amz-Date=" + amzDate +
 			"&X-Amz-Expires=60" + // 1 minute expiry
 			"&X-Amz-SignedHeaders=host" +
-			"&X-Amz-Signature=abc123"
+			"&X-Amz-Signature=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 		req := httptest.NewRequest("GET", "/my-bucket/test.txt?"+query, nil)
 		req.Host = "localhost:8080"
@@ -697,7 +697,7 @@ func TestVerifyPresignedRequest(t *testing.T) {
 			"&X-Amz-Date=" + amzDate +
 			"&X-Amz-Expires=3600" +
 			"&X-Amz-SignedHeaders=host" +
-			"&X-Amz-Signature=abc123"
+			"&X-Amz-Signature=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 		req := httptest.NewRequest("GET", "/my-bucket/test.txt?"+query, nil)
 		req.Host = "localhost:8080"
