@@ -156,6 +156,7 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 
 	for _, part := range parts {
 		partFilename := fmt.Sprintf("part.%05d", part.PartNumber)
+		partPath := filepath.Join(uploadPath, partFilename)
 		partMetaPath := filepath.Join(uploadPath, partFilename+".meta")
 
 		partMetaFile, err := os.Open(partMetaPath)
@@ -169,6 +170,15 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 			return nil, fmt.Errorf("reading part %d metadata: %w", part.PartNumber, err)
 		}
 		partMetaFile.Close()
+
+		// Verify actual part file size matches metadata
+		partInfo, err := os.Stat(partPath)
+		if err != nil {
+			return nil, fmt.Errorf("part %d: %w", part.PartNumber, ErrPartNotFound)
+		}
+		if partInfo.Size() != partMeta.Size {
+			return nil, fmt.Errorf("part %d size mismatch: metadata claims %d bytes, file has %d bytes", part.PartNumber, partMeta.Size, partInfo.Size())
+		}
 
 		// Normalize ETags for comparison (remove quotes if present)
 		expectedETag := strings.Trim(part.ETag, "\"")
