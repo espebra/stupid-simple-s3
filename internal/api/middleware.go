@@ -192,45 +192,49 @@ func MetricsMiddleware(next http.Handler) http.Handler {
 }
 
 // AccessLogMiddleware logs HTTP requests using structured logging
-func AccessLogMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		rw := newResponseWriter(w)
-		cr := &countingReader{ReadCloser: r.Body}
-		r.Body = cr
+func AccessLogMiddleware(trustedProxies []string) func(http.Handler) http.Handler {
+	proxyChecker := newTrustedProxyChecker(trustedProxies)
 
-		next.ServeHTTP(rw, r)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			rw := newResponseWriter(w)
+			cr := &countingReader{ReadCloser: r.Body}
+			r.Body = cr
 
-		duration := time.Since(start)
-		clientIP := getClientIP(r)
-		requestID := GetRequestID(r)
+			next.ServeHTTP(rw, r)
 
-		// Log health and metrics endpoints at debug level to reduce noise
-		if isInternalEndpoint(r.URL.Path) {
-			slog.Debug("request",
+			duration := time.Since(start)
+				clientIP := getClientIPWithTrust(r, proxyChecker)
+			requestID := GetRequestID(r)
+
+			// Log health and metrics endpoints at debug level to reduce noise
+			if isInternalEndpoint(r.URL.Path) {
+				slog.Debug("request",
+					"client_ip", clientIP,
+					"method", r.Method,
+					"path", r.URL.Path,
+					"status", rw.statusCode,
+					"duration", duration.String(),
+				)
+				return
+			}
+
+			operation := getOperationFromContext(r)
+
+			slog.Info("request",
 				"client_ip", clientIP,
 				"method", r.Method,
-				"path", r.URL.Path,
+				"path", r.URL.RequestURI(),
 				"status", rw.statusCode,
+				"bytes_in", cr.bytesRead,
+				"bytes_out", rw.bytesWritten,
 				"duration", duration.String(),
+				"request_id", requestID,
+				"operation", operation,
 			)
-			return
-		}
-
-		operation := getOperationFromContext(r)
-
-		slog.Info("request",
-			"client_ip", clientIP,
-			"method", r.Method,
-			"path", r.URL.RequestURI(),
-			"status", rw.statusCode,
-			"bytes_in", cr.bytesRead,
-			"bytes_out", rw.bytesWritten,
-			"duration", duration.String(),
-			"request_id", requestID,
-			"operation", operation,
-		)
-	})
+		})
+	}
 }
 
 // isInternalEndpoint returns true for health check and metrics endpoints

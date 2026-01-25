@@ -89,7 +89,7 @@ func (s *Server) Handler() http.Handler {
 		s.mux.ServeHTTP(w, r)
 	})
 	// Apply middlewares: RequestID first, then AccessLog
-	return RequestIDMiddleware(AccessLogMiddleware(handler))
+	return RequestIDMiddleware(AccessLogMiddleware(s.cfg.Server.TrustedProxies)(handler))
 }
 
 // ListenAndServe starts the server with security-hardened timeouts
