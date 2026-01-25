@@ -350,25 +350,30 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 	}
 
 	// Write metadata atomically using temp file and rename
+	// If metadata write fails, roll back the data file to maintain consistency
 	metaTmpPath := metaPath + ".tmp." + tmpID
 	metaFile, err := os.Create(metaTmpPath)
 	if err != nil {
+		os.Remove(dataPath) // Roll back data file
 		return nil, fmt.Errorf("creating metadata file: %w", err)
 	}
 
 	if err := json.NewEncoder(metaFile).Encode(objMeta); err != nil {
 		metaFile.Close()
 		os.Remove(metaTmpPath)
+		os.Remove(dataPath) // Roll back data file
 		return nil, fmt.Errorf("writing metadata: %w", err)
 	}
 
 	if err := metaFile.Close(); err != nil {
 		os.Remove(metaTmpPath)
+		os.Remove(dataPath) // Roll back data file
 		return nil, fmt.Errorf("closing metadata file: %w", err)
 	}
 
 	if err := os.Rename(metaTmpPath, metaPath); err != nil {
 		os.Remove(metaTmpPath)
+		os.Remove(dataPath) // Roll back data file
 		return nil, fmt.Errorf("renaming metadata file: %w", err)
 	}
 
