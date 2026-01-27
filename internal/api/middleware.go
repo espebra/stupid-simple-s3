@@ -215,7 +215,7 @@ func AccessLogMiddleware(trustedProxies []string) func(http.Handler) http.Handle
 					"method", r.Method,
 					"path", r.URL.Path,
 					"status", rw.statusCode,
-					"duration", duration.String(),
+					"duration", duration.Seconds(),
 				)
 				return
 			}
@@ -229,7 +229,7 @@ func AccessLogMiddleware(trustedProxies []string) func(http.Handler) http.Handle
 				"status", rw.statusCode,
 				"bytes_in", cr.bytesRead,
 				"bytes_out", rw.bytesWritten,
-				"duration", duration.String(),
+				"duration", duration.Seconds(),
 				"request_id", requestID,
 				"operation", operation,
 			)

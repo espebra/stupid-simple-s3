@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/url"
@@ -157,6 +158,7 @@ func (h *Handlers) CreateBucket(w http.ResponseWriter, r *http.Request) {
 			s3.WriteErrorResponse(w, s3.ErrInvalidBucketName)
 			return
 		}
+		slog.Error("failed to create bucket", "error", err, "bucket", bucket, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
@@ -184,6 +186,7 @@ func (h *Handlers) DeleteBucket(w http.ResponseWriter, r *http.Request) {
 			s3.WriteErrorResponse(w, s3.ErrInvalidBucketName)
 			return
 		}
+		slog.Error("failed to delete bucket", "error", err, "bucket", bucket, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
@@ -270,6 +273,7 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 			s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
 			return
 		}
+		slog.Error("failed to put object", "error", err, "bucket", bucket, "key", key, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
@@ -317,6 +321,7 @@ func (h *Handlers) CopyObject(w http.ResponseWriter, r *http.Request) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
 			return
 		}
+		slog.Error("failed to copy object", "error", err, "src_bucket", srcBucket, "src_key", srcKey, "dst_bucket", dstBucket, "dst_key", dstKey, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
@@ -365,6 +370,7 @@ func (h *Handlers) GetObject(w http.ResponseWriter, r *http.Request) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
 			return
 		}
+		slog.Error("failed to get object", "error", err, "bucket", bucket, "key", key, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
@@ -415,6 +421,7 @@ func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
 			return
 		}
+		slog.Error("failed to get object metadata for range request", "error", err, "bucket", bucket, "key", key, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
@@ -442,6 +449,7 @@ func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
 
 	reader, _, err := h.storage.GetObjectRange(bucket, key, start, end)
 	if err != nil {
+		slog.Error("failed to get object range", "error", err, "bucket", bucket, "key", key, "start", start, "end", end, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
@@ -588,6 +596,7 @@ func (h *Handlers) HeadObject(w http.ResponseWriter, r *http.Request) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
 			return
 		}
+		slog.Error("failed to head object", "error", err, "bucket", bucket, "key", key, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
@@ -632,6 +641,7 @@ func (h *Handlers) DeleteObject(w http.ResponseWriter, r *http.Request) {
 
 	err := h.storage.DeleteObject(bucket, key)
 	if err != nil {
+		slog.Error("failed to delete object", "error", err, "bucket", bucket, "key", key, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
@@ -667,6 +677,7 @@ func (h *Handlers) CreateMultipartUpload(w http.ResponseWriter, r *http.Request)
 			s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
 			return
 		}
+		slog.Error("failed to create multipart upload", "error", err, "bucket", bucket, "key", key, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
@@ -743,6 +754,7 @@ func (h *Handlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchUpload)
 			return
 		}
+		slog.Error("failed to upload part", "error", err, "bucket", bucket, "key", key, "upload_id", uploadID, "part_number", partNumber, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
@@ -806,6 +818,7 @@ func (h *Handlers) CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 			s3.WriteErrorResponse(w, s3.ErrNoSuchUpload)
 			return
 		}
+		slog.Error("failed to complete multipart upload", "error", err, "bucket", bucket, "key", key, "upload_id", uploadID, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
@@ -855,6 +868,7 @@ func (h *Handlers) AbortMultipartUpload(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := h.storage.AbortMultipartUpload(uploadID); err != nil {
+		slog.Error("failed to abort multipart upload", "error", err, "bucket", bucket, "key", key, "upload_id", uploadID, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
@@ -936,6 +950,7 @@ func (h *Handlers) ListObjectsV2(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.storage.ListObjects(bucket, opts)
 	if err != nil {
+		slog.Error("failed to list objects", "error", err, "bucket", bucket, "prefix", opts.Prefix, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
@@ -1018,6 +1033,7 @@ func (h *Handlers) DeleteObjects(w http.ResponseWriter, r *http.Request) {
 	for _, obj := range deleteReq.Objects {
 		err := h.storage.DeleteObject(bucket, obj.Key)
 		if err != nil {
+			slog.Error("failed to delete object in batch", "error", err, "bucket", bucket, "key", obj.Key, "request_id", GetRequestID(r))
 			result.Error = append(result.Error, s3.DeleteError{
 				Key:     obj.Key,
 				Code:    string(s3.ErrInternalError),
