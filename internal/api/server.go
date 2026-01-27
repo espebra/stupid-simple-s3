@@ -85,6 +85,9 @@ func (s *Server) Handler() http.Handler {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("ok"))
 			return
+		case "/favicon.ico":
+			w.WriteHeader(http.StatusNotFound)
+			return
 		}
 		s.mux.ServeHTTP(w, r)
 	})
