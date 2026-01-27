@@ -11,16 +11,18 @@ import (
 // awsChunkedReader decodes AWS chunked transfer encoding
 // Format: <hex-size>;chunk-signature=<sig>\r\n<data>\r\n...0;chunk-signature=<sig>\r\n\r\n
 type awsChunkedReader struct {
-	reader    *bufio.Reader
-	remaining int64
-	eof       bool
-	totalRead int64
+	reader       *bufio.Reader
+	remaining    int64
+	eof          bool
+	totalRead    int64
+	maxChunkSize int64
 }
 
 // newAWSChunkedReader creates a new AWS chunked reader
-func newAWSChunkedReader(r io.Reader) *awsChunkedReader {
+func newAWSChunkedReader(r io.Reader, maxChunkSize int64) *awsChunkedReader {
 	return &awsChunkedReader{
-		reader: bufio.NewReader(r),
+		reader:       bufio.NewReader(r),
+		maxChunkSize: maxChunkSize,
 	}
 }
 
@@ -97,14 +99,11 @@ func (r *awsChunkedReader) readChunkHeader() (int64, error) {
 	}
 
 	// Validate chunk size to prevent overflow and bypass of size limits
-	// AWS S3 maximum chunk size is 64KB for streaming uploads, but we allow up to 64MB
-	// to be flexible with different client implementations
-	const maxChunkSize = 64 * 1024 * 1024
 	if size < 0 {
 		return 0, fmt.Errorf("invalid chunk size: negative value")
 	}
-	if size > maxChunkSize {
-		return 0, fmt.Errorf("invalid chunk size: exceeds maximum allowed")
+	if r.maxChunkSize > 0 && size > r.maxChunkSize {
+		return 0, fmt.Errorf("invalid chunk size: exceeds maximum allowed (%d > %d)", size, r.maxChunkSize)
 	}
 
 	return size, nil
@@ -128,10 +127,10 @@ func isAWSChunkedEncoding(contentEncoding, contentSha256 string) bool {
 }
 
 // wrapBodyIfChunked wraps the request body if it uses AWS chunked encoding
-// Returns the wrapped reader
-func wrapBodyIfChunked(body io.ReadCloser, contentEncoding, contentSha256 string) io.Reader {
+// Returns the wrapped reader. maxChunkSize limits the maximum allowed chunk size (0 = unlimited).
+func wrapBodyIfChunked(body io.ReadCloser, contentEncoding, contentSha256 string, maxChunkSize int64) io.Reader {
 	if isAWSChunkedEncoding(contentEncoding, contentSha256) {
-		return newAWSChunkedReader(body)
+		return newAWSChunkedReader(body, maxChunkSize)
 	}
 	return body
 }
