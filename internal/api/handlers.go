@@ -255,7 +255,7 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Handle AWS chunked encoding (used by Minio SDK and some AWS SDK configurations)
-	var body io.Reader = wrapBodyIfChunked(r.Body, r.Header.Get("Content-Encoding"), r.Header.Get("X-Amz-Content-Sha256"))
+	var body io.Reader = wrapBodyIfChunked(r.Body, r.Header.Get("Content-Encoding"), r.Header.Get("X-Amz-Content-Sha256"), h.cfg.Limits.MaxChunkSize)
 
 	// Enforce maximum object size limit
 	if h.cfg.Limits.MaxObjectSize > 0 {
@@ -736,7 +736,7 @@ func (h *Handlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 	defer metrics.UploadsActive.Dec()
 
 	// Handle AWS chunked encoding
-	var body io.Reader = wrapBodyIfChunked(r.Body, r.Header.Get("Content-Encoding"), r.Header.Get("X-Amz-Content-Sha256"))
+	var body io.Reader = wrapBodyIfChunked(r.Body, r.Header.Get("Content-Encoding"), r.Header.Get("X-Amz-Content-Sha256"), h.cfg.Limits.MaxChunkSize)
 
 	// Enforce maximum part size limit
 	if h.cfg.Limits.MaxPartSize > 0 {

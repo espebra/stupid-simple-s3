@@ -35,6 +35,7 @@ type Storage struct {
 type Limits struct {
 	MaxObjectSize int64 // Maximum size of a single object in bytes (0 = unlimited)
 	MaxPartSize   int64 // Maximum size of a single multipart part in bytes (0 = unlimited)
+	MaxChunkSize  int64 // Maximum size of a single AWS chunked encoding chunk in bytes
 }
 
 // DefaultMaxObjectSize is 5GB (S3's maximum for single PUT)
@@ -42,6 +43,10 @@ const DefaultMaxObjectSize = 5 * 1024 * 1024 * 1024
 
 // DefaultMaxPartSize is 5GB (S3's maximum part size)
 const DefaultMaxPartSize = 5 * 1024 * 1024 * 1024
+
+// DefaultMaxChunkSize is 5GB to match max object size.
+// AWS SDK v2 with trailing checksums sends the entire payload as a single chunk.
+const DefaultMaxChunkSize = 5 * 1024 * 1024 * 1024
 
 type Cleanup struct {
 	Enabled  bool
@@ -131,6 +136,7 @@ type Config struct {
 //   - STUPID_METRICS_PASSWORD: Password for /metrics basic auth (optional)
 //   - STUPID_MAX_OBJECT_SIZE: Maximum object size in bytes (default: 5GB)
 //   - STUPID_MAX_PART_SIZE: Maximum multipart part size in bytes (default: 5GB)
+//   - STUPID_MAX_CHUNK_SIZE: Maximum AWS chunked encoding chunk size in bytes (default: 5GB)
 //   - STUPID_TRUSTED_PROXIES: Comma-separated list of trusted proxy IPs/CIDRs (optional)
 //   - STUPID_READ_TIMEOUT: Maximum duration for reading requests (default: "30m")
 //   - STUPID_WRITE_TIMEOUT: Maximum duration for writing responses (default: "30m")
@@ -192,6 +198,7 @@ func Load() (*Config, error) {
 		Limits: Limits{
 			MaxObjectSize: parseEnvInt64("STUPID_MAX_OBJECT_SIZE", DefaultMaxObjectSize),
 			MaxPartSize:   parseEnvInt64("STUPID_MAX_PART_SIZE", DefaultMaxPartSize),
+			MaxChunkSize:  parseEnvInt64("STUPID_MAX_CHUNK_SIZE", DefaultMaxChunkSize),
 		},
 		Log: LogConfig{
 			Format: getEnvOrDefault("STUPID_LOG_FORMAT", "text"),
@@ -309,6 +316,7 @@ func (c *Config) LogConfiguration() {
 		"metrics_auth_enabled", c.MetricsAuth.Enabled(),
 		"max_object_size", c.Limits.MaxObjectSize,
 		"max_part_size", c.Limits.MaxPartSize,
+		"max_chunk_size", c.Limits.MaxChunkSize,
 		"trusted_proxies_count", len(c.Server.TrustedProxies),
 		"read_timeout", c.Server.ReadTimeout.String(),
 		"write_timeout", c.Server.WriteTimeout.String(),
