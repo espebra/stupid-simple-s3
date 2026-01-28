@@ -20,9 +20,6 @@ import (
 	"github.com/espen/stupid-simple-s3/internal/version"
 )
 
-// ShutdownTimeout is the maximum time to wait for graceful shutdown
-const ShutdownTimeout = 120 * time.Second
-
 func main() {
 	showVersion := flag.Bool("version", false, "Print version information and exit")
 	flag.Parse()
@@ -105,7 +102,7 @@ func main() {
 	slog.Info("received shutdown signal", "signal", sig.String())
 
 	// Graceful shutdown with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {
