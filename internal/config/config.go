@@ -79,10 +79,11 @@ func (c *Cleanup) GetMaxAge() time.Duration {
 }
 
 type Server struct {
-	Address        string
-	TrustedProxies []string      // List of trusted proxy IPs/CIDRs that can set X-Forwarded-For
-	ReadTimeout    time.Duration // Maximum duration for reading entire request
-	WriteTimeout   time.Duration // Maximum duration for writing response
+	Address         string
+	TrustedProxies  []string      // List of trusted proxy IPs/CIDRs that can set X-Forwarded-For
+	ReadTimeout     time.Duration // Maximum duration for reading entire request
+	WriteTimeout    time.Duration // Maximum duration for writing response
+	ShutdownTimeout time.Duration // Maximum duration for graceful shutdown
 }
 
 // DefaultReadTimeout is 30 minutes to allow large uploads
@@ -90,6 +91,9 @@ const DefaultReadTimeout = 30 * time.Minute
 
 // DefaultWriteTimeout is 30 minutes to allow large downloads
 const DefaultWriteTimeout = 30 * time.Minute
+
+// DefaultShutdownTimeout is the default maximum time to wait for graceful shutdown
+const DefaultShutdownTimeout = 30 * time.Second
 
 type MetricsAuth struct {
 	Username string
@@ -140,6 +144,7 @@ type Config struct {
 //   - STUPID_TRUSTED_PROXIES: Comma-separated list of trusted proxy IPs/CIDRs (optional)
 //   - STUPID_READ_TIMEOUT: Maximum duration for reading requests (default: "30m")
 //   - STUPID_WRITE_TIMEOUT: Maximum duration for writing responses (default: "30m")
+//   - STUPID_SHUTDOWN_TIMEOUT: Maximum duration for graceful shutdown (default: "30s")
 //   - STUPID_LOG_FORMAT: Log output format, "json" or "text" (default: "text")
 //   - STUPID_LOG_LEVEL: Log level, "debug", "info", "warn", "error" (default: "info")
 func Load() (*Config, error) {
@@ -181,10 +186,11 @@ func Load() (*Config, error) {
 			MultipartPath: multipartPath,
 		},
 		Server: Server{
-			Address:        address,
-			TrustedProxies: trustedProxies,
-			ReadTimeout:    parseEnvDuration("STUPID_READ_TIMEOUT", DefaultReadTimeout),
-			WriteTimeout:   parseEnvDuration("STUPID_WRITE_TIMEOUT", DefaultWriteTimeout),
+			Address:         address,
+			TrustedProxies:  trustedProxies,
+			ReadTimeout:     parseEnvDuration("STUPID_READ_TIMEOUT", DefaultReadTimeout),
+			WriteTimeout:    parseEnvDuration("STUPID_WRITE_TIMEOUT", DefaultWriteTimeout),
+			ShutdownTimeout: parseEnvDuration("STUPID_SHUTDOWN_TIMEOUT", DefaultShutdownTimeout),
 		},
 		Cleanup: Cleanup{
 			Enabled:  os.Getenv("STUPID_CLEANUP_ENABLED") != "false",
@@ -320,6 +326,7 @@ func (c *Config) LogConfiguration() {
 		"trusted_proxies_count", len(c.Server.TrustedProxies),
 		"read_timeout", c.Server.ReadTimeout.String(),
 		"write_timeout", c.Server.WriteTimeout.String(),
+		"shutdown_timeout", c.Server.ShutdownTimeout.String(),
 		"credentials_count", len(c.Credentials),
 		"log_format", c.Log.Format,
 		"log_level", c.Log.Level,

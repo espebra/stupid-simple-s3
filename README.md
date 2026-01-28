@@ -43,10 +43,21 @@ The service is configured using environment variables:
 | `STUPID_TRUSTED_PROXIES` | Comma-separated list of trusted proxy IPs/CIDRs for X-Forwarded-For | (optional) |
 | `STUPID_READ_TIMEOUT` | Maximum duration for reading requests | `30m` |
 | `STUPID_WRITE_TIMEOUT` | Maximum duration for writing responses | `30m` |
+| `STUPID_SHUTDOWN_TIMEOUT` | Maximum duration for graceful shutdown | `30s` |
 | `STUPID_LOG_FORMAT` | Log output format (`text` or `json`) | `text` |
 | `STUPID_LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | `info` |
 
 At least one credential pair (read-only or read-write) must be provided.
+
+### Graceful Shutdown
+
+When the server receives a shutdown signal (SIGINT or SIGTERM), it performs a graceful shutdown:
+
+1. **New requests are rejected** - The server immediately stops accepting new connections. Clients attempting to connect will receive a connection refused error.
+2. **In-flight requests are allowed to complete** - Existing requests continue processing until they finish or the shutdown timeout is reached.
+3. **Timeout enforcement** - If in-flight requests don't complete within `STUPID_SHUTDOWN_TIMEOUT` (default: 30 seconds), the server forcefully terminates remaining connections.
+
+This behavior ensures that ongoing uploads and downloads have a chance to complete during deployments or restarts, while preventing the server from hanging indefinitely on stuck connections.
 
 ### Cleanup Job
 
