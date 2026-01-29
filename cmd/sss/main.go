@@ -80,8 +80,10 @@ func main() {
 	}
 
 	// Start cleanup job if enabled
+	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
+	defer cleanupCancel()
 	if cfg.Cleanup.Enabled {
-		go runCleanupJob(store, cfg.Cleanup.GetInterval(), cfg.Cleanup.GetMaxAge())
+		go runCleanupJob(cleanupCtx, store, cfg.Cleanup.GetInterval(), cfg.Cleanup.GetMaxAge())
 	}
 
 	// Create server
@@ -100,6 +102,9 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-quit
 	slog.Info("received shutdown signal", "signal", sig.String())
+
+	// Stop cleanup job
+	cleanupCancel()
 
 	// Graceful shutdown with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
@@ -144,7 +149,7 @@ func parseLogLevel(level string) slog.Level {
 }
 
 // runCleanupJob periodically cleans up stale multipart uploads
-func runCleanupJob(store storage.MultipartStorage, interval, maxAge time.Duration) {
+func runCleanupJob(ctx context.Context, store storage.MultipartStorage, interval, maxAge time.Duration) {
 	slog.Info("starting multipart upload cleanup job",
 		"interval", interval.String(),
 		"max_age", maxAge.String(),
@@ -162,12 +167,18 @@ func runCleanupJob(store storage.MultipartStorage, interval, maxAge time.Duratio
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		cleaned, err := store.CleanupStaleUploads(maxAge)
-		if err != nil {
-			slog.Error("cleanup error", "error", err)
-		} else if cleaned > 0 {
-			slog.Info("cleaned up stale multipart uploads", "count", cleaned)
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("cleanup job stopped")
+			return
+		case <-ticker.C:
+			cleaned, err := store.CleanupStaleUploads(maxAge)
+			if err != nil {
+				slog.Error("cleanup error", "error", err)
+			} else if cleaned > 0 {
+				slog.Info("cleaned up stale multipart uploads", "count", cleaned)
+			}
 		}
 	}
 }
