@@ -41,6 +41,17 @@ func NewServer(cfg *config.Config, store storage.MultipartStorage) *Server {
 		mux:      http.NewServeMux(),
 	}
 	s.setupRoutes()
+
+	s.httpServer = &http.Server{
+		Addr:              cfg.Server.Address,
+		Handler:           s.Handler(),
+		ReadHeaderTimeout: ReadHeaderTimeout,
+		ReadTimeout:       cfg.Server.ReadTimeout,
+		WriteTimeout:      cfg.Server.WriteTimeout,
+		IdleTimeout:       IdleTimeout,
+		MaxHeaderBytes:    MaxHeaderBytes,
+	}
+
 	return s
 }
 
@@ -98,17 +109,6 @@ func (s *Server) Handler() http.Handler {
 // ListenAndServe starts the server with security-hardened timeouts
 func (s *Server) ListenAndServe() error {
 	slog.Info("starting S3 server", "address", s.cfg.Server.Address)
-
-	s.httpServer = &http.Server{
-		Addr:              s.cfg.Server.Address,
-		Handler:           s.Handler(),
-		ReadHeaderTimeout: ReadHeaderTimeout,
-		ReadTimeout:       s.cfg.Server.ReadTimeout,
-		WriteTimeout:      s.cfg.Server.WriteTimeout,
-		IdleTimeout:       IdleTimeout,
-		MaxHeaderBytes:    MaxHeaderBytes,
-	}
-
 	return s.httpServer.ListenAndServe()
 }
 

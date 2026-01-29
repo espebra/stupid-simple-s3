@@ -13,6 +13,8 @@ Group=stupid
 # Load environment variables from file (- prefix means don't fail if missing)
 EnvironmentFile=-/etc/stupid-simple-s3/environment
 ExecStart=/usr/bin/stupid-simple-s3
+# Allow 35s for graceful shutdown (5s more than app's default 30s timeout)
+TimeoutStopSec=35
 # Restart on non-zero exit code, signal, or timeout
 Restart=on-failure
 # Wait 5 seconds before restarting
