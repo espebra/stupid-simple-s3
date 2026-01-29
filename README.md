@@ -40,6 +40,7 @@ The service is configured using environment variables:
 | `STUPID_METRICS_PASSWORD` | Password for /metrics basic auth | (optional) |
 | `STUPID_MAX_OBJECT_SIZE` | Maximum object size in bytes | `5368709120` (5GB) |
 | `STUPID_MAX_PART_SIZE` | Maximum multipart part size in bytes | `5368709120` (5GB) |
+| `STUPID_MAX_CHUNK_SIZE` | Maximum AWS chunked encoding chunk size in bytes | `5368709120` (5GB) |
 | `STUPID_TRUSTED_PROXIES` | Comma-separated list of trusted proxy IPs/CIDRs for X-Forwarded-For | (optional) |
 | `STUPID_READ_TIMEOUT` | Maximum duration for reading requests | `30m` |
 | `STUPID_WRITE_TIMEOUT` | Maximum duration for writing responses | `30m` |
