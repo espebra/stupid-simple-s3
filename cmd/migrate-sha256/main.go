@@ -140,7 +140,7 @@ func main() {
 
 	// Clean up empty prefix directories
 	if !*dryRun {
-		filepath.WalkDir(bucketsPath, func(path string, d os.DirEntry, err error) error {
+		_ = filepath.WalkDir(bucketsPath, func(path string, d os.DirEntry, err error) error {
 			if err != nil || !d.IsDir() {
 				return nil
 			}
