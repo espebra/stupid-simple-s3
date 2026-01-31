@@ -2,6 +2,7 @@ package storage
 
 import (
 	"crypto/md5"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -56,6 +57,11 @@ func ValidateKey(key string) error {
 	// Reject empty keys
 	if key == "" {
 		return fmt.Errorf("%w: key cannot be empty", ErrInvalidKey)
+	}
+
+	// Reject keys longer than 1024 bytes (S3 limit)
+	if len(key) > 1024 {
+		return fmt.Errorf("%w: key cannot exceed 1024 bytes", ErrInvalidKey)
 	}
 
 	// Reject keys containing null bytes
@@ -155,7 +161,7 @@ func NewFilesystemStorage(basePath, multipartPath string) (*FilesystemStorage, e
 }
 
 // keyToPath converts an object key to a filesystem path within a bucket
-// Uses a 4-character hash prefix for directory distribution (65,536 directories) and base64-encoded key
+// Uses a 4-character hash prefix for directory distribution (65,536 directories) and SHA-256 hex directory name
 // Returns an error if the key is invalid or the resulting path would escape the base directory.
 func (fs *FilesystemStorage) keyToPath(bucket, key string) (string, error) {
 	// Validate the bucket name
@@ -168,12 +174,10 @@ func (fs *FilesystemStorage) keyToPath(bucket, key string) (string, error) {
 		return "", err
 	}
 
-	// Create a hash prefix from the first 4 chars of MD5 of the key
-	hash := md5.Sum([]byte(key))
-	prefix := hex.EncodeToString(hash[:2])
-
-	// Base64 encode the key for safe filesystem storage
-	encodedKey := base64.URLEncoding.EncodeToString([]byte(key))
+	// SHA-256 hash of the key: first 2 bytes for shard prefix, full hash for directory name
+	keyHash := sha256.Sum256([]byte(key))
+	prefix := hex.EncodeToString(keyHash[:2])
+	encodedKey := hex.EncodeToString(keyHash[:])
 
 	result := filepath.Join(fs.basePath, "buckets", bucket, "objects", prefix, encodedKey)
 
