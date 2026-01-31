@@ -75,6 +75,19 @@ sudo rpm -i stupid-simple-s3-1.0.0.x86_64.rpm
 sudo systemctl enable --now stupid-simple-s3
 ```
 
+## Building from source
+
+```bash
+# Build (uses vendored dependencies)
+make build
+
+# Or build for multiple platforms
+make build-all
+
+# Update vendored dependencies
+make vendor
+```
+
 ## Environment variables for configuration
 
 The service is configured using environment variables:
@@ -125,19 +138,6 @@ The cleanup job runs periodically to remove stale multipart uploads. When a mult
 - **Max Age**: Uploads older than this are considered stale and removed (default: 24 hours)
 
 Set `STUPID_CLEANUP_ENABLED=false` to disable the cleanup job entirely.
-
-## Building
-
-```bash
-# Build (uses vendored dependencies)
-make build
-
-# Or build for multiple platforms
-make build-all
-
-# Update vendored dependencies
-make vendor
-```
 
 ## Running
 
@@ -282,9 +282,9 @@ scrape_configs:
     #   password: 'metrics_password'
 ```
 
-## Storage Layout
+## Filesystem layout for storage
 
-Objects are stored on the filesystem organized by bucket, with a 4-character hash prefix (65,536 directories per bucket) for even distribution:
+Objects are stored on the filesystem organized by bucket, with a 4-character hash prefix (65,536 directories per bucket) for even distribution. The filename is base64 url encoded and is used as the base64 key below:
 
 ```
 /var/lib/stupid-simple-s3/data/buckets/
