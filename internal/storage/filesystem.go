@@ -542,6 +542,12 @@ func (l *limitedReadCloser) Close() error {
 	return l.closer.Close()
 }
 
+// objectEntry holds just the key and meta.json path for lightweight sorting/filtering.
+type objectEntry struct {
+	key      string
+	metaPath string
+}
+
 // ListObjects lists objects with optional prefix, delimiter, and pagination
 func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions) (*ListObjectsResult, error) {
 	if err := ValidateBucketName(bucket); err != nil {
@@ -556,9 +562,11 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 	}
 
 	objectsPath := filepath.Join(fs.basePath, "buckets", bucket, "objects")
-	var allObjects []s3.ObjectMetadata
 
-	// Walk through all hash prefix directories
+	// Pass 1: Walk filesystem and collect only keys and meta.json paths.
+	// This avoids decoding full metadata for every object.
+	var entries []objectEntry
+
 	err := filepath.WalkDir(objectsPath, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -575,29 +583,33 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 			return nil
 		}
 
-		// Read metadata
+		// Read only the key from meta.json using a minimal struct
 		metaFile, err := os.Open(metaPath)
 		if err != nil {
 			return nil
 		}
 		defer metaFile.Close()
 
-		var meta s3.ObjectMetadata
-		if err := json.NewDecoder(metaFile).Decode(&meta); err != nil {
+		var partial struct {
+			Key string `json:"key"`
+		}
+		if err := json.NewDecoder(metaFile).Decode(&partial); err != nil {
 			return nil
 		}
 
-		allObjects = append(allObjects, meta)
+		entries = append(entries, objectEntry{key: partial.Key, metaPath: metaPath})
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("walking objects directory: %w", err)
 	}
 
-	// Sort objects by key
-	sortObjectsByKey(allObjects)
+	// Sort entries by key
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].key < entries[j].key
+	})
 
-	// Apply filtering and pagination
+	// Apply filtering and pagination on lightweight entries
 	result := &ListObjectsResult{}
 	commonPrefixSet := make(map[string]bool)
 	startKey := opts.StartAfter
@@ -609,25 +621,27 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 		}
 	}
 
+	// resultEntries tracks which entries need full metadata loaded (pass 2)
+	var resultEntries []objectEntry
 	count := 0
-	for _, obj := range allObjects {
+	for _, entry := range entries {
 		// Skip objects before startKey
-		if startKey != "" && obj.Key <= startKey {
+		if startKey != "" && entry.key <= startKey {
 			continue
 		}
 
 		// Apply prefix filter
-		if opts.Prefix != "" && !strings.HasPrefix(obj.Key, opts.Prefix) {
+		if opts.Prefix != "" && !strings.HasPrefix(entry.key, opts.Prefix) {
 			continue
 		}
 
 		// Handle delimiter (for common prefixes / virtual directories)
 		if opts.Delimiter != "" {
 			// Find delimiter after prefix
-			afterPrefix := obj.Key[len(opts.Prefix):]
+			afterPrefix := entry.key[len(opts.Prefix):]
 			delimIdx := strings.Index(afterPrefix, opts.Delimiter)
 			if delimIdx >= 0 {
-				// This is a common prefix
+				// This is a common prefix — no full metadata needed
 				commonPrefix := opts.Prefix + afterPrefix[:delimIdx+len(opts.Delimiter)]
 				if !commonPrefixSet[commonPrefix] {
 					commonPrefixSet[commonPrefix] = true
@@ -640,14 +654,32 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 		// Check if we've reached the limit
 		if count >= opts.MaxKeys {
 			result.IsTruncated = true
-			if len(result.Objects) > 0 {
-				result.NextContinuationToken = base64.URLEncoding.EncodeToString([]byte(result.Objects[len(result.Objects)-1].Key))
+			if len(resultEntries) > 0 {
+				result.NextContinuationToken = base64.URLEncoding.EncodeToString([]byte(resultEntries[len(resultEntries)-1].key))
 			}
 			break
 		}
 
-		result.Objects = append(result.Objects, obj)
+		resultEntries = append(resultEntries, entry)
 		count++
+	}
+
+	// Pass 2: Load full metadata only for the result page entries.
+	result.Objects = make([]s3.ObjectMetadata, 0, len(resultEntries))
+	for _, entry := range resultEntries {
+		metaFile, err := os.Open(entry.metaPath)
+		if err != nil {
+			continue // skip objects that disappeared between passes
+		}
+
+		var meta s3.ObjectMetadata
+		if err := json.NewDecoder(metaFile).Decode(&meta); err != nil {
+			metaFile.Close()
+			continue
+		}
+		metaFile.Close()
+
+		result.Objects = append(result.Objects, meta)
 	}
 
 	return result, nil
@@ -673,8 +705,3 @@ func (fs *FilesystemStorage) CopyObject(srcBucket, srcKey, dstBucket, dstKey str
 
 // Helper functions
 
-func sortObjectsByKey(objects []s3.ObjectMetadata) {
-	sort.Slice(objects, func(i, j int) bool {
-		return objects[i].Key < objects[j].Key
-	})
-}
