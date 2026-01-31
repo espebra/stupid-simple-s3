@@ -18,7 +18,64 @@ A minimal S3-compatible object storage service in Go. Designed for single-server
 - Prometheus metrics endpoint with optional basic auth
 - Minimal external dependencies
 
-## Configuration
+## Getting started
+
+### Running with Docker
+
+```bash
+docker run -d \
+  -p 5553:5553 \
+  -e STUPID_RW_ACCESS_KEY="AKIAIOSFODNN7EXAMPLE" \
+  -e STUPID_RW_SECRET_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" \
+  -v /path/to/data:/var/lib/stupid-simple-s3 \
+  ghcr.io/espebra/stupid-simple-s3:latest
+```
+
+### Running with Docker Compose
+
+```yaml
+services:
+  stupid-simple-s3:
+    image: ghcr.io/espebra/stupid-simple-s3:latest
+    ports:
+      - "5553:5553"
+    environment:
+      STUPID_RW_ACCESS_KEY: "AKIAIOSFODNN7EXAMPLE"
+      STUPID_RW_SECRET_KEY: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    volumes:
+      - s3-data:/var/lib/stupid-simple-s3
+
+volumes:
+  s3-data:
+```
+
+### Installing from packages
+
+#### Debian/Ubuntu
+
+```bash
+# Install
+sudo dpkg -i stupid-simple-s3_1.0.0_amd64.deb
+
+# Edit environment variables in /etc/stupid-simple-s3/environment
+
+# Start at boot
+sudo systemctl enable --now stupid-simple-s3
+```
+
+#### RHEL/Fedora
+
+```bash
+# Install
+sudo rpm -i stupid-simple-s3-1.0.0.x86_64.rpm
+
+# Edit environment variables in /etc/stupid-simple-s3/environment
+
+# Start at boot
+sudo systemctl enable --now stupid-simple-s3
+```
+
+## Environment variables for configuration
 
 The service is configured using environment variables:
 
@@ -306,7 +363,7 @@ sub vcl_backend_response {
 }
 ```
 
-## Releasing
+## Release process
 
 Releases are automated via GitHub Actions. Pushing a version tag triggers the release workflow.
 
@@ -330,55 +387,6 @@ The release workflow builds and publishes:
 | `checksums.txt` | SHA256 checksums |
 | Container image | Multi-arch image on ghcr.io |
 
-### Installing from packages
-
-```bash
-# Debian/Ubuntu
-sudo dpkg -i stupid-simple-s3_1.0.0_amd64.deb
-sudo systemctl edit stupid-simple-s3  # Add environment variables
-sudo systemctl enable --now stupid-simple-s3
-
-# RHEL/Fedora
-sudo rpm -i stupid-simple-s3-1.0.0.x86_64.rpm
-sudo systemctl edit stupid-simple-s3  # Add environment variables
-sudo systemctl enable --now stupid-simple-s3
-```
-
-### Running with Docker
-
-```bash
-docker run -d \
-  -p 5553:5553 \
-  -e STUPID_BUCKET_NAME="my-bucket" \
-  -e STUPID_STORAGE_PATH="/data" \
-  -e STUPID_MULTIPART_PATH="/tmp" \
-  -e STUPID_RW_ACCESS_KEY="AKIAIOSFODNN7EXAMPLE" \
-  -e STUPID_RW_SECRET_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" \
-  -v /path/to/data:/data \
-  -v /path/to/tmp:/tmp \
-  ghcr.io/espebra/stupid-simple-s3:latest
-```
-
-### Running with Docker Compose
-
-```yaml
-services:
-  stupid-simple-s3:
-    image: ghcr.io/espebra/stupid-simple-s3:latest
-    ports:
-      - "5553:5553"
-    environment:
-      STUPID_BUCKET_NAME: "my-bucket"
-      STUPID_RW_ACCESS_KEY: "AKIAIOSFODNN7EXAMPLE"
-      STUPID_RW_SECRET_KEY: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-    volumes:
-      - s3-data:/var/lib/stupid-simple-s3
-    restart: unless-stopped
-
-volumes:
-  s3-data:
-```
-
 ## Testing
 
 Run the test suite:
@@ -395,6 +403,9 @@ go test -bench=. ./...
 
 # Run benchmarks with memory stats
 go test -bench=. -benchmem ./...
+
+# Run fuzz tests
+make fuzz
 ```
 
 ## License
