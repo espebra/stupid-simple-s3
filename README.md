@@ -284,14 +284,14 @@ scrape_configs:
 
 ## Filesystem layout for storage
 
-Objects are stored on the filesystem organized by bucket, with a 4-character hash prefix (65,536 directories per bucket) for even distribution. The filename is base64 url encoded and is used as the base64 key below:
+Objects are stored on the filesystem organized by bucket, with a 4-character hash prefix (65,536 directories per bucket) for even distribution. The object directory name is the full SHA-256 hex digest of the key (64 characters), which keeps directory names at a fixed length regardless of key size. The original S3 key is stored in `meta.json`.
 
 ```
 /var/lib/stupid-simple-s3/data/buckets/
   {bucket-name}/
     objects/
-      {4-char-hash-prefix}/
-        {base64-key}/
+      {4-char-sha256-prefix}/
+        {sha256-hex-digest}/
           data        # object content
           meta.json   # metadata (key, size, content-type, etag, etc.)
 
