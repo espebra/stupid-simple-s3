@@ -704,4 +704,3 @@ func (fs *FilesystemStorage) CopyObject(srcBucket, srcKey, dstBucket, dstKey str
 }
 
 // Helper functions
-

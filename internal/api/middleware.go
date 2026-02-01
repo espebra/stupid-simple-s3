@@ -205,7 +205,7 @@ func AccessLogMiddleware(trustedProxies []string) func(http.Handler) http.Handle
 			next.ServeHTTP(rw, r)
 
 			duration := time.Since(start)
-				clientIP := getClientIPWithTrust(r, proxyChecker)
+			clientIP := getClientIPWithTrust(r, proxyChecker)
 			requestID := GetRequestID(r)
 
 			// Log health and metrics endpoints at debug level to reduce noise

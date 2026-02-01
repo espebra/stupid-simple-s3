@@ -9,14 +9,16 @@ A minimal S3-compatible object storage service in Go. Designed for single-server
 
 ## Features
 
-- Multi-bucket support via S3 CreateBucket/DeleteBucket API
-- AWS Signature v4 authentication
-- Read-only and read-write S3 credentials
-- Presigned URL support for temporary access
-- Multipart upload support
-- Filesystem-backed storage
-- Prometheus metrics endpoint with optional basic auth
-- Minimal external dependencies
+- Simple filesystem-backed storage. No database.
+- AWS Signature v4 authentication.
+- Read-only and read-write S3 credentials.
+- Multi-bucket support via S3 CreateBucket/DeleteBucket API.
+- Presigned URL support for temporary access.
+- Multipart upload support.
+- Prometheus metrics endpoint with optional basic auth.
+- Few external dependencies.
+
+Note that Stupid Simple S3 is HTTP only. TLS support needs to be provided by a separate TLS proxy.
 
 ## Getting started
 
@@ -77,15 +79,14 @@ sudo systemctl enable --now stupid-simple-s3
 
 ## Building from source
 
+Using vendored dependencies:
+
 ```bash
-# Build (uses vendored dependencies)
+# Build on your architecture and platform
 make build
 
-# Or build for multiple platforms
+# Or build for multiple architectures and platforms
 make build-all
-
-# Update vendored dependencies
-make vendor
 ```
 
 ## Environment variables for configuration
@@ -249,7 +250,13 @@ These endpoints do not require authentication.
 
 ## Metrics
 
-Prometheus metrics are available at `/metrics`. By default, no authentication is required. To enable basic authentication, set both `STUPID_METRICS_USERNAME` and `STUPID_METRICS_PASSWORD` environment variables.
+Metrics check endpoint is available for monitoring:
+
+| Endpoint | Description |
+|----------|-------------|
+| `/metrics` | Prometheus metrics |
+
+By default, no authentication is required. To enable basic authentication, set both `STUPID_METRICS_USERNAME` and `STUPID_METRICS_PASSWORD` environment variables.
 
 Available metrics:
 
