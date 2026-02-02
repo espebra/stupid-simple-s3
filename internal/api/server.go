@@ -96,7 +96,11 @@ func (s *Server) Handler() http.Handler {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("ok"))
 			return
-		case "/favicon.ico":
+		case "/favicon.ico",
+			"/robots.txt",
+			"/apple-touch-icon.png",
+			"/apple-touch-icon-precomposed.png":
+			// Avoid authentication check
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
