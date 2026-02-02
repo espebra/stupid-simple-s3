@@ -682,6 +682,8 @@ func (h *Handlers) CreateMultipartUpload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	metrics.MultipartUploadsActive.Inc()
+
 	result := s3.InitiateMultipartUploadResult{
 		Xmlns:    "http://s3.amazonaws.com/doc/2006-03-01/",
 		Bucket:   bucket,
@@ -823,6 +825,8 @@ func (h *Handlers) CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	metrics.MultipartUploadsActive.Dec()
+
 	result := s3.CompleteMultipartUploadResult{
 		Xmlns:  "http://s3.amazonaws.com/doc/2006-03-01/",
 		Bucket: bucket,
@@ -872,6 +876,8 @@ func (h *Handlers) AbortMultipartUpload(w http.ResponseWriter, r *http.Request) 
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
+
+	metrics.MultipartUploadsActive.Dec()
 
 	w.WriteHeader(http.StatusNoContent)
 }
