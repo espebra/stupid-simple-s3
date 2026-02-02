@@ -23,6 +23,21 @@ fuzz:
 	go test -fuzz=FuzzParseAuthorization -fuzztime=1h ./internal/auth/
 	go test -fuzz=FuzzParsePresignedURL -fuzztime=1h ./internal/auth/
 	go test -fuzz=FuzzURIEncode -fuzztime=1h ./internal/auth/
+	go test -fuzz=FuzzIsValidIPHeader -fuzztime=1h ./internal/auth/
+	go test -fuzz=FuzzBuildCanonicalQueryStringSingle -fuzztime=1h ./internal/auth/
+	go test -fuzz=FuzzBuildCanonicalQueryStringMultiple -fuzztime=1h ./internal/auth/
+	go test -fuzz=FuzzGetPresignedAccessKeyID -fuzztime=1h ./internal/auth/
+	go test -fuzz=FuzzBuildCanonicalHeaders -fuzztime=1h ./internal/auth/
+
+shortfuzz:
+	go test -fuzz=FuzzParseAuthorization -fuzztime=30s ./internal/auth/
+	go test -fuzz=FuzzParsePresignedURL -fuzztime=30s ./internal/auth/
+	go test -fuzz=FuzzURIEncode -fuzztime=30s ./internal/auth/
+	go test -fuzz=FuzzIsValidIPHeader -fuzztime=30s ./internal/auth/
+	go test -fuzz=FuzzBuildCanonicalQueryStringSingle -fuzztime=30s ./internal/auth/
+	go test -fuzz=FuzzBuildCanonicalQueryStringMultiple -fuzztime=30s ./internal/auth/
+	go test -fuzz=FuzzGetPresignedAccessKeyID -fuzztime=30s ./internal/auth/
+	go test -fuzz=FuzzBuildCanonicalHeaders -fuzztime=30s ./internal/auth/
 
 clean:
 	rm -rf $(BUILD_DIR)
