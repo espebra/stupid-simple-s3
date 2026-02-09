@@ -53,33 +53,22 @@ volumes:
 
 ### Installing from packages
 
-#### Debian/Ubuntu
-
 ```bash
-# Install
+## 1. Install package
+# Debian/Ubuntu
 sudo dpkg -i stupid-simple-s3_1.0.0_amd64.deb
 
-# Edit environment variables in /etc/stupid-simple-s3/environment
-
-# Start at boot
-sudo systemctl enable --now stupid-simple-s3
-```
-
-#### RHEL/Fedora
-
-```bash
-# Install
+# RHEL/Fedora
 sudo rpm -i stupid-simple-s3-1.0.0.x86_64.rpm
 
-# Edit environment variables in /etc/stupid-simple-s3/environment
+## 2. Configure
+# Edit /etc/stupid-simple-s3/environment
 
-# Start at boot
+## 3. Start now and at boot
 sudo systemctl enable --now stupid-simple-s3
 ```
 
 ## Building from source
-
-Using vendored dependencies:
 
 ```bash
 # Build on your architecture and platform
@@ -140,31 +129,6 @@ The cleanup job runs periodically to remove stale multipart uploads. When a mult
 
 Set `STUPID_CLEANUP_ENABLED=false` to disable the cleanup job entirely.
 
-## Running
-
-```bash
-# Create storage directories
-mkdir -p /var/lib/stupid-simple-s3/data /var/lib/stupid-simple-s3/tmp
-
-# Set required environment variables and run
-export STUPID_BUCKET_NAME="my-bucket"  # Optional: auto-creates bucket at startup
-export STUPID_STORAGE_PATH="/var/lib/stupid-simple-s3/data"
-export STUPID_MULTIPART_PATH="/var/lib/stupid-simple-s3/tmp"
-export STUPID_RW_ACCESS_KEY="AKIAIOSFODNN7EXAMPLE"
-export STUPID_RW_SECRET_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-./bin/stupid-simple-s3
-```
-
-Buckets can also be created dynamically via the S3 API:
-
-```bash
-# Create a bucket
-aws --endpoint-url http://localhost:5553 s3 mb s3://my-bucket
-
-# Delete an empty bucket
-aws --endpoint-url http://localhost:5553 s3 rb s3://my-bucket
-```
-
 ## Usage with AWS CLI
 
 Configure AWS CLI to use your credentials:
@@ -178,6 +142,12 @@ aws configure set default.region us-east-1
 Basic operations:
 
 ```bash
+# Create a bucket
+aws --endpoint-url http://localhost:5553 s3 mb s3://my-bucket
+
+# Delete an empty bucket
+aws --endpoint-url http://localhost:5553 s3 rb s3://my-bucket
+
 # Upload a file
 aws --endpoint-url http://localhost:5553 s3 cp file.txt s3://my-bucket/file.txt
 
@@ -186,9 +156,6 @@ aws --endpoint-url http://localhost:5553 s3 cp s3://my-bucket/file.txt -
 
 # Delete a file
 aws --endpoint-url http://localhost:5553 s3 rm s3://my-bucket/file.txt
-
-# Upload a large file (uses multipart automatically)
-aws --endpoint-url http://localhost:5553 s3 cp large-file.bin s3://my-bucket/large-file.bin
 ```
 
 ## Presigned URLs
@@ -198,9 +165,6 @@ Generate presigned URLs to grant temporary access to objects without sharing cre
 ```bash
 # Generate a presigned URL for downloading (valid for 1 hour)
 aws --endpoint-url http://localhost:5553 s3 presign s3://my-bucket/file.txt --expires-in 3600
-
-# Generate a presigned URL for uploading
-aws --endpoint-url http://localhost:5553 s3 presign s3://my-bucket/new-file.txt --expires-in 3600
 ```
 
 The generated URL can be used directly with `curl` or any HTTP client:
@@ -237,9 +201,7 @@ Presigned URL parameters:
 | CompleteMultipartUpload | POST | `/{bucket}/{key}?uploadId=X` |
 | AbortMultipartUpload | DELETE | `/{bucket}/{key}?uploadId=X` |
 
-## Health Checks
-
-Health check endpoints are available for container orchestration:
+## Health check endpoints
 
 | Endpoint | Description |
 |----------|-------------|
@@ -248,9 +210,7 @@ Health check endpoints are available for container orchestration:
 
 These endpoints do not require authentication.
 
-## Metrics
-
-Metrics check endpoint is available for monitoring:
+## Metrics endpoint
 
 | Endpoint | Description |
 |----------|-------------|
@@ -280,7 +240,7 @@ Example Prometheus scrape config:
 
 ```yaml
 scrape_configs:
-  - job_name: 'sss'
+  - job_name: 'stupid-simple-s3'
     static_configs:
       - targets: ['localhost:5553']
     # If basic auth is enabled:
@@ -297,8 +257,8 @@ Objects are stored on the filesystem organized by bucket, with a 4-character has
 /var/lib/stupid-simple-s3/data/buckets/
   {bucket-name}/
     objects/
-      {4-char-sha256-prefix}/
-        {sha256-hex-digest}/
+      {4-char-sha256-prefix-of-the-key}/
+        {sha256-hex-digest-of-the-key}/
           data        # object content
           meta.json   # metadata (key, size, content-type, etag, etc.)
 
@@ -314,28 +274,10 @@ Objects are stored on the filesystem organized by bucket, with a 4-character has
 
 HTTPS is not supported directly. Use a reverse proxy like Varnish or nginx in front of the service for TLS termination.
 
-Example nginx configuration:
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name s3.example.com;
-
-    ssl_certificate /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:5553;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
-
 When using a reverse proxy, configure `STUPID_TRUSTED_PROXIES` to trust the proxy's IP headers:
 
 ```bash
-# Trust the local nginx proxy
+# Trust the local proxy
 export STUPID_TRUSTED_PROXIES="127.0.0.1"
 
 # Trust multiple proxies or CIDR ranges
@@ -348,27 +290,6 @@ When `STUPID_TRUSTED_PROXIES` is configured and a request arrives from one of th
 - The extracted client IP appears in access logs instead of the proxy's IP
 
 Without this configuration, the service ignores `X-Forwarded-For` and `X-Real-IP` headers for security, and access logs will show the proxy's IP address.
-
-Example Varnish VCL configuration (use with [hitch](https://github.com/varnish/hitch) for TLS termination):
-
-```vcl
-vcl 4.1;
-
-backend default {
-    .host = "127.0.0.1";
-    .port = "5553";
-}
-
-sub vcl_recv {
-    # Pass all requests to the backend (no caching for S3 operations)
-    return (pass);
-}
-
-sub vcl_backend_response {
-    # Do not cache responses
-    set beresp.uncacheable = true;
-}
-```
 
 ## Release process
 
@@ -405,7 +326,7 @@ make test
 # Run tests with verbose output
 go test -v ./...
 
-# Run benchmarks
+# Run benchmark tests
 go test -bench=. ./...
 
 # Run benchmarks with memory stats
