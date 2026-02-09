@@ -88,7 +88,7 @@ The service is configured using environment variables:
 | `STUPID_PORT` | Listen port | `5553` |
 | `STUPID_BUCKET_NAME` | Bucket to auto-create at startup | (optional) |
 | `STUPID_STORAGE_PATH` | Storage path for objects | `/var/lib/stupid-simple-s3/data` |
-| `STUPID_MULTIPART_PATH` | Storage path for multipart uploads | `/var/lib/stupid-simple-s3/tmp` |
+| `STUPID_MULTIPART_PATH` | Temporary storage path for multipart uploads during upload | `/var/lib/stupid-simple-s3/tmp` |
 | `STUPID_CLEANUP_ENABLED` | Enable cleanup job (`true`/`false`) | `true` |
 | `STUPID_CLEANUP_INTERVAL` | Cleanup interval | `1h` |
 | `STUPID_CLEANUP_MAX_AGE` | Max age for stale uploads | `24h` |
