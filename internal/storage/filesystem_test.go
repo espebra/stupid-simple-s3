@@ -27,18 +27,18 @@ func setupTestStorage(t *testing.T) (*FilesystemStorage, func()) {
 
 	storage, err := NewFilesystemStorage(basePath, multipartPath)
 	if err != nil {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 		t.Fatalf("failed to create storage: %v", err)
 	}
 
 	// Create the test bucket
 	if err := storage.CreateBucket(testBucket); err != nil {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 		t.Fatalf("failed to create test bucket: %v", err)
 	}
 
 	cleanup := func() {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 	}
 
 	return storage, cleanup
@@ -49,7 +49,7 @@ func TestNewFilesystemStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	basePath := filepath.Join(tmpDir, "data")
 	multipartPath := filepath.Join(tmpDir, "multipart")
@@ -118,7 +118,7 @@ func TestCreateBucket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	basePath := filepath.Join(tmpDir, "data")
 	multipartPath := filepath.Join(tmpDir, "multipart")
@@ -164,7 +164,7 @@ func TestBucketExists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	basePath := filepath.Join(tmpDir, "data")
 	multipartPath := filepath.Join(tmpDir, "multipart")
@@ -212,7 +212,7 @@ func TestDeleteBucket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	basePath := filepath.Join(tmpDir, "data")
 	multipartPath := filepath.Join(tmpDir, "multipart")
@@ -316,7 +316,7 @@ func TestPutAndGetObject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	gotContent, err := io.ReadAll(reader)
 	if err != nil {
@@ -487,7 +487,7 @@ func TestPutObjectOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	gotContent, _ := io.ReadAll(reader)
 	if !bytes.Equal(gotContent, newContent) {
@@ -521,7 +521,7 @@ func TestKeyWithSpecialCharacters(t *testing.T) {
 			}
 
 			gotContent, _ := io.ReadAll(reader)
-			reader.Close()
+			_ = reader.Close()
 
 			if !bytes.Equal(gotContent, content) {
 				t.Errorf("content mismatch for key %q", key)
@@ -550,7 +550,7 @@ func TestEmptyObject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	gotContent, _ := io.ReadAll(reader)
 	if len(gotContent) != 0 {
@@ -586,7 +586,7 @@ func TestLargeObject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	gotContent, err := io.ReadAll(reader)
 	if err != nil {
@@ -659,7 +659,7 @@ func TestMultipartUpload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	expectedContent := append(append(part1Content, part2Content...), part3Content...)
 	gotContent, _ := io.ReadAll(reader)
@@ -989,7 +989,7 @@ func TestCopyObject(t *testing.T) {
 		t.Fatalf("GetObject failed: %v", err)
 	}
 	gotContent, _ := io.ReadAll(reader)
-	reader.Close()
+	_ = reader.Close()
 
 	if !bytes.Equal(gotContent, content) {
 		t.Error("copied content doesn't match original")
@@ -1030,7 +1030,7 @@ func TestGetObjectRange(t *testing.T) {
 			t.Fatalf("GetObjectRange failed: %v", err)
 		}
 		got, _ := io.ReadAll(reader)
-		reader.Close()
+		_ = reader.Close()
 
 		if !bytes.Equal(got, content) {
 			t.Errorf("content = %q, want %q", got, content)
@@ -1043,7 +1043,7 @@ func TestGetObjectRange(t *testing.T) {
 			t.Fatalf("GetObjectRange failed: %v", err)
 		}
 		got, _ := io.ReadAll(reader)
-		reader.Close()
+		_ = reader.Close()
 
 		expected := []byte("0123456789")
 		if !bytes.Equal(got, expected) {
@@ -1057,7 +1057,7 @@ func TestGetObjectRange(t *testing.T) {
 			t.Fatalf("GetObjectRange failed: %v", err)
 		}
 		got, _ := io.ReadAll(reader)
-		reader.Close()
+		_ = reader.Close()
 
 		expected := []byte("56789ABCDE")
 		if !bytes.Equal(got, expected) {
@@ -1071,7 +1071,7 @@ func TestGetObjectRange(t *testing.T) {
 			t.Fatalf("GetObjectRange failed: %v", err)
 		}
 		got, _ := io.ReadAll(reader)
-		reader.Close()
+		_ = reader.Close()
 
 		expected := []byte("FGHIJ")
 		if !bytes.Equal(got, expected) {
@@ -1085,7 +1085,7 @@ func TestGetObjectRange(t *testing.T) {
 			t.Fatalf("GetObjectRange failed: %v", err)
 		}
 		got, _ := io.ReadAll(reader)
-		reader.Close()
+		_ = reader.Close()
 
 		if len(got) != 1 || got[0] != '5' {
 			t.Errorf("content = %q, want %q", got, "5")
@@ -1341,7 +1341,7 @@ func TestCleanupStaleUploads(t *testing.T) {
 	t.Run("handles nonexistent multipart directory", func(t *testing.T) {
 		// Create a fresh storage with a path that doesn't exist
 		tmpDir, _ := os.MkdirTemp("", "sss-cleanup-test-*")
-		defer os.RemoveAll(tmpDir)
+		defer func() { _ = os.RemoveAll(tmpDir) }()
 
 		basePath := filepath.Join(tmpDir, "data")
 		multipartPath := filepath.Join(tmpDir, "nonexistent-multipart")
@@ -1350,7 +1350,7 @@ func TestCleanupStaleUploads(t *testing.T) {
 		s, _ := NewFilesystemStorage(basePath, multipartPath)
 
 		// Remove the multipart directory
-		os.RemoveAll(multipartPath)
+		_ = os.RemoveAll(multipartPath)
 
 		// Should handle gracefully
 		cleaned, err := s.CleanupStaleUploads(time.Hour)

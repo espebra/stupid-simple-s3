@@ -78,7 +78,7 @@ func main() {
 			errors++
 			return nil
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		var meta objectMeta
 		if err := json.NewDecoder(f).Decode(&meta); err != nil {

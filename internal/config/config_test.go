@@ -24,26 +24,26 @@ func TestLoad(t *testing.T) {
 	defer func() {
 		for k, v := range origEnv {
 			if v == "" {
-				os.Unsetenv(k)
+				_ = os.Unsetenv(k)
 			} else {
-				os.Setenv(k, v)
+				_ = os.Setenv(k, v)
 			}
 		}
 	}()
 
 	clearEnv := func() {
 		for k := range origEnv {
-			os.Unsetenv(k)
+			_ = os.Unsetenv(k)
 		}
 	}
 
 	t.Run("valid config with read-write credential", func(t *testing.T) {
 		clearEnv()
-		os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
-		os.Setenv("STUPID_STORAGE_PATH", "/var/lib/data")
-		os.Setenv("STUPID_MULTIPART_PATH", "/var/lib/tmp")
-		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIAIOSFODNN7EXAMPLE")
-		os.Setenv("STUPID_RW_SECRET_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+		_ = os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
+		_ = os.Setenv("STUPID_STORAGE_PATH", "/var/lib/data")
+		_ = os.Setenv("STUPID_MULTIPART_PATH", "/var/lib/tmp")
+		_ = os.Setenv("STUPID_RW_ACCESS_KEY", "AKIAIOSFODNN7EXAMPLE")
+		_ = os.Setenv("STUPID_RW_SECRET_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
 
 		cfg, err := Load()
 		if err != nil {
@@ -69,13 +69,13 @@ func TestLoad(t *testing.T) {
 
 	t.Run("valid config with both credentials", func(t *testing.T) {
 		clearEnv()
-		os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
-		os.Setenv("STUPID_STORAGE_PATH", "/var/lib/data")
-		os.Setenv("STUPID_MULTIPART_PATH", "/var/lib/tmp")
-		os.Setenv("STUPID_RO_ACCESS_KEY", "AKIAREADONLY")
-		os.Setenv("STUPID_RO_SECRET_KEY", "readonlysecret")
-		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIAREADWRITE")
-		os.Setenv("STUPID_RW_SECRET_KEY", "readwritesecret")
+		_ = os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
+		_ = os.Setenv("STUPID_STORAGE_PATH", "/var/lib/data")
+		_ = os.Setenv("STUPID_MULTIPART_PATH", "/var/lib/tmp")
+		_ = os.Setenv("STUPID_RO_ACCESS_KEY", "AKIAREADONLY")
+		_ = os.Setenv("STUPID_RO_SECRET_KEY", "readonlysecret")
+		_ = os.Setenv("STUPID_RW_ACCESS_KEY", "AKIAREADWRITE")
+		_ = os.Setenv("STUPID_RW_SECRET_KEY", "readwritesecret")
 
 		cfg, err := Load()
 		if err != nil {
@@ -95,13 +95,13 @@ func TestLoad(t *testing.T) {
 
 	t.Run("custom host and port", func(t *testing.T) {
 		clearEnv()
-		os.Setenv("STUPID_HOST", "127.0.0.1")
-		os.Setenv("STUPID_PORT", "9000")
-		os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
-		os.Setenv("STUPID_STORAGE_PATH", "/var/lib/data")
-		os.Setenv("STUPID_MULTIPART_PATH", "/var/lib/tmp")
-		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
-		os.Setenv("STUPID_RW_SECRET_KEY", "secret")
+		_ = os.Setenv("STUPID_HOST", "127.0.0.1")
+		_ = os.Setenv("STUPID_PORT", "9000")
+		_ = os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
+		_ = os.Setenv("STUPID_STORAGE_PATH", "/var/lib/data")
+		_ = os.Setenv("STUPID_MULTIPART_PATH", "/var/lib/tmp")
+		_ = os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
+		_ = os.Setenv("STUPID_RW_SECRET_KEY", "secret")
 
 		cfg, err := Load()
 		if err != nil {
@@ -115,9 +115,9 @@ func TestLoad(t *testing.T) {
 
 	t.Run("cleanup enabled by default", func(t *testing.T) {
 		clearEnv()
-		os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
-		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
-		os.Setenv("STUPID_RW_SECRET_KEY", "secret")
+		_ = os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
+		_ = os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
+		_ = os.Setenv("STUPID_RW_SECRET_KEY", "secret")
 
 		cfg, err := Load()
 		if err != nil {
@@ -131,10 +131,10 @@ func TestLoad(t *testing.T) {
 
 	t.Run("cleanup disabled explicitly", func(t *testing.T) {
 		clearEnv()
-		os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
-		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
-		os.Setenv("STUPID_RW_SECRET_KEY", "secret")
-		os.Setenv("STUPID_CLEANUP_ENABLED", "false")
+		_ = os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
+		_ = os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
+		_ = os.Setenv("STUPID_RW_SECRET_KEY", "secret")
+		_ = os.Setenv("STUPID_CLEANUP_ENABLED", "false")
 
 		cfg, err := Load()
 		if err != nil {
@@ -148,11 +148,11 @@ func TestLoad(t *testing.T) {
 
 	t.Run("cleanup custom interval and max age", func(t *testing.T) {
 		clearEnv()
-		os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
-		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
-		os.Setenv("STUPID_RW_SECRET_KEY", "secret")
-		os.Setenv("STUPID_CLEANUP_INTERVAL", "30m")
-		os.Setenv("STUPID_CLEANUP_MAX_AGE", "12h")
+		_ = os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
+		_ = os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
+		_ = os.Setenv("STUPID_RW_SECRET_KEY", "secret")
+		_ = os.Setenv("STUPID_CLEANUP_INTERVAL", "30m")
+		_ = os.Setenv("STUPID_CLEANUP_MAX_AGE", "12h")
 
 		cfg, err := Load()
 		if err != nil {
@@ -169,8 +169,8 @@ func TestLoad(t *testing.T) {
 
 	t.Run("missing bucket name is allowed", func(t *testing.T) {
 		clearEnv()
-		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
-		os.Setenv("STUPID_RW_SECRET_KEY", "secret")
+		_ = os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
+		_ = os.Setenv("STUPID_RW_SECRET_KEY", "secret")
 
 		cfg, err := Load()
 		if err != nil {
@@ -185,9 +185,9 @@ func TestLoad(t *testing.T) {
 
 	t.Run("default storage paths", func(t *testing.T) {
 		clearEnv()
-		os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
-		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
-		os.Setenv("STUPID_RW_SECRET_KEY", "secret")
+		_ = os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
+		_ = os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
+		_ = os.Setenv("STUPID_RW_SECRET_KEY", "secret")
 
 		cfg, err := Load()
 		if err != nil {
@@ -204,7 +204,7 @@ func TestLoad(t *testing.T) {
 
 	t.Run("no credentials", func(t *testing.T) {
 		clearEnv()
-		os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
+		_ = os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
 
 		_, err := Load()
 		if err == nil {
@@ -214,10 +214,10 @@ func TestLoad(t *testing.T) {
 
 	t.Run("partial read-only credential ignored", func(t *testing.T) {
 		clearEnv()
-		os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
-		os.Setenv("STUPID_RO_ACCESS_KEY", "AKIA") // missing secret
-		os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA2")
-		os.Setenv("STUPID_RW_SECRET_KEY", "secret2")
+		_ = os.Setenv("STUPID_BUCKET_NAME", "test-bucket")
+		_ = os.Setenv("STUPID_RO_ACCESS_KEY", "AKIA") // missing secret
+		_ = os.Setenv("STUPID_RW_ACCESS_KEY", "AKIA2")
+		_ = os.Setenv("STUPID_RW_SECRET_KEY", "secret2")
 
 		cfg, err := Load()
 		if err != nil {

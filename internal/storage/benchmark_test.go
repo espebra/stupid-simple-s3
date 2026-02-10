@@ -28,18 +28,18 @@ func setupBenchStorage(b *testing.B) (*FilesystemStorage, func()) {
 
 	storage, err := NewFilesystemStorage(basePath, multipartPath)
 	if err != nil {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 		b.Fatalf("failed to create storage: %v", err)
 	}
 
 	// Create the benchmark bucket
 	if err := storage.CreateBucket(benchBucket); err != nil {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 		b.Fatalf("failed to create benchmark bucket: %v", err)
 	}
 
 	cleanup := func() {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 	}
 
 	return storage, cleanup

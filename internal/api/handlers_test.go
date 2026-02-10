@@ -36,20 +36,20 @@ func setupTestHandlers(t *testing.T) (*Handlers, storage.MultipartStorage, func(
 
 	store, err := storage.NewFilesystemStorage(cfg.Storage.Path, cfg.Storage.MultipartPath)
 	if err != nil {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 		t.Fatalf("failed to create storage: %v", err)
 	}
 
 	// Create the test bucket
 	if err := store.CreateBucket("test-bucket"); err != nil {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 		t.Fatalf("failed to create test bucket: %v", err)
 	}
 
 	handlers := NewHandlers(cfg, store)
 
 	cleanup := func() {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 	}
 
 	return handlers, store, cleanup
@@ -1732,7 +1732,7 @@ func TestUploadSizeLimits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	cfg := &config.Config{
 		Bucket: config.Bucket{Name: "test-bucket"},

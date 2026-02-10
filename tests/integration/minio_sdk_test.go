@@ -209,7 +209,7 @@ func TestMinioSDK_PutGetObject(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetObject failed: %v", err)
 		}
-		defer obj.Close()
+		defer func() { _ = obj.Close() }()
 
 		data, err := io.ReadAll(obj)
 		if err != nil {
@@ -273,7 +273,7 @@ func TestMinioSDK_UpdateObject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get updated object: %v", err)
 	}
-	defer obj.Close()
+	defer func() { _ = obj.Close() }()
 
 	data, _ := io.ReadAll(obj)
 	if !bytes.Equal(data, updatedContent) {
@@ -449,7 +449,7 @@ func TestMinioSDK_CopyObject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
-	defer obj.Close()
+	defer func() { _ = obj.Close() }()
 
 	data, _ := io.ReadAll(obj)
 	if !bytes.Equal(data, content) {
@@ -482,7 +482,7 @@ func TestMinioSDK_RangeRequests(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetObject failed: %v", err)
 		}
-		defer obj.Close()
+		defer func() { _ = obj.Close() }()
 
 		// Read only first 5 bytes
 		data := make([]byte, 5)
@@ -502,7 +502,7 @@ func TestMinioSDK_RangeRequests(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetObject failed: %v", err)
 		}
-		defer obj.Close()
+		defer func() { _ = obj.Close() }()
 
 		data := make([]byte, 5)
 		_, err = obj.ReadAt(data, 10)
@@ -548,7 +548,7 @@ func TestMinioSDK_PresignedDownload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HTTP GET failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -595,7 +595,7 @@ func TestMinioSDK_PresignedUpload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HTTP PUT failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -607,7 +607,7 @@ func TestMinioSDK_PresignedUpload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
-	defer obj.Close()
+	defer func() { _ = obj.Close() }()
 
 	data, _ := io.ReadAll(obj)
 	if !bytes.Equal(data, content) {
@@ -675,7 +675,7 @@ func TestMinioSDK_MultipartUpload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
-	defer obj.Close()
+	defer func() { _ = obj.Close() }()
 
 	data, err := io.ReadAll(obj)
 	if err != nil {
@@ -790,7 +790,7 @@ func TestMinioSDK_Authentication(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetObject with read-only credentials failed: %v", err)
 		}
-		defer obj.Close()
+		defer func() { _ = obj.Close() }()
 
 		_, err = io.ReadAll(obj)
 		if err != nil {
@@ -892,7 +892,7 @@ func TestMinioSDK_SpecialCharacterKeys(t *testing.T) {
 			}
 
 			data, _ := io.ReadAll(obj)
-			obj.Close()
+			_ = obj.Close()
 
 			if !bytes.Equal(data, content) {
 				t.Errorf("content mismatch for key %q", tc.key)
@@ -933,7 +933,7 @@ func TestMinioSDK_LargeFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
-	defer obj.Close()
+	defer func() { _ = obj.Close() }()
 
 	data, err := io.ReadAll(obj)
 	if err != nil {

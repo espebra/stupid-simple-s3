@@ -390,7 +390,7 @@ func (s *SignatureV4) ParsePresignedURL(r *http.Request) (*ParsedPresignedURL, e
 		return nil, fmt.Errorf("invalid X-Amz-Signature length: expected 64, got %d", len(signature))
 	}
 	for _, c := range signature {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 			return nil, fmt.Errorf("invalid X-Amz-Signature: not a valid hex string")
 		}
 	}

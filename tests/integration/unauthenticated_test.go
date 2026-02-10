@@ -54,7 +54,7 @@ func TestUnauthenticated_RequestsAreRejected(t *testing.T) {
 			if err != nil {
 				t.Fatalf("request failed: %v", err)
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 
 			if resp.StatusCode != http.StatusForbidden {
 				t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusForbidden)

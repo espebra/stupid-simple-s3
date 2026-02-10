@@ -305,7 +305,7 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 		absBase = realBase
 	}
 	if !strings.HasPrefix(realObjPath, absBase+string(filepath.Separator)) {
-		os.RemoveAll(objPath) // Clean up potentially dangerous directory
+		_ = os.RemoveAll(objPath) // Clean up potentially dangerous directory
 		return nil, fmt.Errorf("%w: path escapes base directory via symlink", ErrInvalidKey)
 	}
 
@@ -324,19 +324,19 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 
 	size, err := io.Copy(writer, body)
 	if err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("writing object data: %w", err)
 	}
 
 	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("closing temp file: %w", err)
 	}
 
 	// Rename temp file to final location
 	if err := os.Rename(tmpPath, dataPath); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("renaming temp file: %w", err)
 	}
 
@@ -358,26 +358,26 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 	metaTmpPath := metaPath + ".tmp." + tmpID
 	metaFile, err := os.Create(metaTmpPath)
 	if err != nil {
-		os.Remove(dataPath) // Roll back data file
+		_ = os.Remove(dataPath) // Roll back data file
 		return nil, fmt.Errorf("creating metadata file: %w", err)
 	}
 
 	if err := json.NewEncoder(metaFile).Encode(objMeta); err != nil {
-		metaFile.Close()
-		os.Remove(metaTmpPath)
-		os.Remove(dataPath) // Roll back data file
+		_ = metaFile.Close()
+		_ = os.Remove(metaTmpPath)
+		_ = os.Remove(dataPath) // Roll back data file
 		return nil, fmt.Errorf("writing metadata: %w", err)
 	}
 
 	if err := metaFile.Close(); err != nil {
-		os.Remove(metaTmpPath)
-		os.Remove(dataPath) // Roll back data file
+		_ = os.Remove(metaTmpPath)
+		_ = os.Remove(dataPath) // Roll back data file
 		return nil, fmt.Errorf("closing metadata file: %w", err)
 	}
 
 	if err := os.Rename(metaTmpPath, metaPath); err != nil {
-		os.Remove(metaTmpPath)
-		os.Remove(dataPath) // Roll back data file
+		_ = os.Remove(metaTmpPath)
+		_ = os.Remove(dataPath) // Roll back data file
 		return nil, fmt.Errorf("renaming metadata file: %w", err)
 	}
 
@@ -425,7 +425,7 @@ func (fs *FilesystemStorage) HeadObject(bucket, key string) (*s3.ObjectMetadata,
 		}
 		return nil, fmt.Errorf("opening metadata file: %w", err)
 	}
-	defer metaFile.Close()
+	defer func() { _ = metaFile.Close() }()
 
 	var meta s3.ObjectMetadata
 	if err := json.NewDecoder(metaFile).Decode(&meta); err != nil {
@@ -514,7 +514,7 @@ func (fs *FilesystemStorage) GetObjectRange(bucket, key string, start, end int64
 
 	// Seek to start position
 	if _, err := file.Seek(start, io.SeekStart); err != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, nil, fmt.Errorf("seeking to range start: %w", err)
 	}
 
@@ -588,7 +588,7 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 		if err != nil {
 			return nil
 		}
-		defer metaFile.Close()
+		defer func() { _ = metaFile.Close() }()
 
 		var partial struct {
 			Key string `json:"key"`
@@ -674,10 +674,10 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 
 		var meta s3.ObjectMetadata
 		if err := json.NewDecoder(metaFile).Decode(&meta); err != nil {
-			metaFile.Close()
+			_ = metaFile.Close()
 			continue
 		}
-		metaFile.Close()
+		_ = metaFile.Close()
 
 		result.Objects = append(result.Objects, meta)
 	}
@@ -692,7 +692,7 @@ func (fs *FilesystemStorage) CopyObject(srcBucket, srcKey, dstBucket, dstKey str
 	if err != nil {
 		return nil, err
 	}
-	defer srcReader.Close()
+	defer func() { _ = srcReader.Close() }()
 
 	// Copy to destination
 	dstMeta, err := fs.PutObject(dstBucket, dstKey, srcMeta.ContentType, srcMeta.UserMetadata, srcReader)
