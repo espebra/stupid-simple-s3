@@ -234,7 +234,7 @@ func TestAWSSDK_PutGetObject(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetObject failed: %v", err)
 		}
-		defer result.Body.Close()
+		defer func() { _ = result.Body.Close() }()
 
 		data, err := io.ReadAll(result.Body)
 		if err != nil {
@@ -309,7 +309,7 @@ func TestAWSSDK_UpdateObject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get updated object: %v", err)
 	}
-	defer result.Body.Close()
+	defer func() { _ = result.Body.Close() }()
 
 	data, _ := io.ReadAll(result.Body)
 	if !bytes.Equal(data, updatedContent) {
@@ -519,7 +519,7 @@ func TestAWSSDK_CopyObject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
-	defer result.Body.Close()
+	defer func() { _ = result.Body.Close() }()
 
 	data, _ := io.ReadAll(result.Body)
 	if !bytes.Equal(data, content) {
@@ -557,7 +557,7 @@ func TestAWSSDK_RangeRequests(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetObject failed: %v", err)
 		}
-		defer result.Body.Close()
+		defer func() { _ = result.Body.Close() }()
 
 		data, _ := io.ReadAll(result.Body)
 		expected := "01234"
@@ -575,7 +575,7 @@ func TestAWSSDK_RangeRequests(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetObject failed: %v", err)
 		}
-		defer result.Body.Close()
+		defer func() { _ = result.Body.Close() }()
 
 		data, _ := io.ReadAll(result.Body)
 		expected := "ABCDE"
@@ -593,7 +593,7 @@ func TestAWSSDK_RangeRequests(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetObject failed: %v", err)
 		}
-		defer result.Body.Close()
+		defer func() { _ = result.Body.Close() }()
 
 		data, _ := io.ReadAll(result.Body)
 		expected := "FGHIJ"
@@ -611,7 +611,7 @@ func TestAWSSDK_RangeRequests(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetObject failed: %v", err)
 		}
-		defer result.Body.Close()
+		defer func() { _ = result.Body.Close() }()
 
 		data, _ := io.ReadAll(result.Body)
 		expected := "FGHIJ"
@@ -657,7 +657,7 @@ func TestAWSSDK_PresignedDownload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HTTP GET failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -705,7 +705,7 @@ func TestAWSSDK_PresignedUpload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HTTP PUT failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -720,7 +720,7 @@ func TestAWSSDK_PresignedUpload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
-	defer result.Body.Close()
+	defer func() { _ = result.Body.Close() }()
 
 	data, _ := io.ReadAll(result.Body)
 	if !bytes.Equal(data, content) {
@@ -801,7 +801,7 @@ func TestAWSSDK_MultipartUpload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
-	defer result.Body.Close()
+	defer func() { _ = result.Body.Close() }()
 
 	data, err := io.ReadAll(result.Body)
 	if err != nil {
@@ -967,7 +967,7 @@ func TestAWSSDK_ResponseHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
-	defer result.Body.Close()
+	defer func() { _ = result.Body.Close() }()
 
 	// Verify headers
 	if result.ContentLength == nil || *result.ContentLength != int64(len(content)) {
@@ -1027,7 +1027,7 @@ func TestAWSSDK_SpecialCharacterKeys(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetObject failed: %v", err)
 			}
-			defer result.Body.Close()
+			defer func() { _ = result.Body.Close() }()
 
 			data, _ := io.ReadAll(result.Body)
 			if !bytes.Equal(data, content) {
@@ -1076,7 +1076,7 @@ func TestAWSSDK_LargeFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
-	defer result.Body.Close()
+	defer func() { _ = result.Body.Close() }()
 
 	data, err := io.ReadAll(result.Body)
 	if err != nil {

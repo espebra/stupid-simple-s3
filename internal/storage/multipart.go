@@ -49,13 +49,13 @@ func (fs *FilesystemStorage) CreateMultipartUpload(bucket, key string, contentTy
 	metaPath := filepath.Join(uploadPath, "meta.json")
 	metaFile, err := os.Create(metaPath)
 	if err != nil {
-		os.RemoveAll(uploadPath)
+		_ = os.RemoveAll(uploadPath)
 		return "", fmt.Errorf("creating upload metadata: %w", err)
 	}
-	defer metaFile.Close()
+	defer func() { _ = metaFile.Close() }()
 
 	if err := json.NewEncoder(metaFile).Encode(uploadMeta); err != nil {
-		os.RemoveAll(uploadPath)
+		_ = os.RemoveAll(uploadPath)
 		return "", fmt.Errorf("writing upload metadata: %w", err)
 	}
 
@@ -91,18 +91,18 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 
 	size, err := io.Copy(writer, body)
 	if err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("writing part data: %w", err)
 	}
 
 	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("closing part file: %w", err)
 	}
 
 	if err := os.Rename(tmpPath, partPath); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("renaming part file: %w", err)
 	}
 
@@ -120,7 +120,7 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 	if err != nil {
 		return nil, fmt.Errorf("creating part metadata: %w", err)
 	}
-	defer partMetaFile.Close()
+	defer func() { _ = partMetaFile.Close() }()
 
 	if err := json.NewEncoder(partMetaFile).Encode(partMeta); err != nil {
 		return nil, fmt.Errorf("writing part metadata: %w", err)
@@ -166,10 +166,10 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 
 		var partMeta s3.PartMetadata
 		if err := json.NewDecoder(partMetaFile).Decode(&partMeta); err != nil {
-			partMetaFile.Close()
+			_ = partMetaFile.Close()
 			return nil, fmt.Errorf("reading part %d metadata: %w", part.PartNumber, err)
 		}
-		partMetaFile.Close()
+		_ = partMetaFile.Close()
 
 		// Verify actual part file size matches metadata
 		partInfo, err := os.Stat(partPath)
@@ -221,27 +221,27 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 
 		partFile, err := os.Open(partPath)
 		if err != nil {
-			outFile.Close()
-			os.Remove(tmpPath)
+			_ = outFile.Close()
+			_ = os.Remove(tmpPath)
 			return nil, fmt.Errorf("opening part %d: %w", part.PartNumber, err)
 		}
 
 		_, err = io.Copy(outFile, partFile)
-		partFile.Close()
+		_ = partFile.Close()
 		if err != nil {
-			outFile.Close()
-			os.Remove(tmpPath)
+			_ = outFile.Close()
+			_ = os.Remove(tmpPath)
 			return nil, fmt.Errorf("copying part %d: %w", part.PartNumber, err)
 		}
 	}
 
 	if err := outFile.Close(); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("closing output file: %w", err)
 	}
 
 	if err := os.Rename(tmpPath, dataPath); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("renaming output file: %w", err)
 	}
 
@@ -269,14 +269,14 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	if err != nil {
 		return nil, fmt.Errorf("creating metadata file: %w", err)
 	}
-	defer metaFile.Close()
+	defer func() { _ = metaFile.Close() }()
 
 	if err := json.NewEncoder(metaFile).Encode(objMeta); err != nil {
 		return nil, fmt.Errorf("writing metadata: %w", err)
 	}
 
 	// Clean up multipart upload directory
-	os.RemoveAll(uploadPath)
+	_ = os.RemoveAll(uploadPath)
 
 	return objMeta, nil
 }
@@ -319,7 +319,7 @@ func (fs *FilesystemStorage) getMultipartUploadInternal(uploadID string) (*s3.Mu
 		}
 		return nil, fmt.Errorf("opening upload metadata: %w", err)
 	}
-	defer metaFile.Close()
+	defer func() { _ = metaFile.Close() }()
 
 	var meta s3.MultipartUploadMetadata
 	if err := json.NewDecoder(metaFile).Decode(&meta); err != nil {
@@ -370,10 +370,10 @@ func (fs *FilesystemStorage) ListParts(uploadID string) ([]s3.PartMetadata, erro
 
 		var partMeta s3.PartMetadata
 		if err := json.NewDecoder(metaFile).Decode(&partMeta); err != nil {
-			metaFile.Close()
+			_ = metaFile.Close()
 			continue
 		}
-		metaFile.Close()
+		_ = metaFile.Close()
 
 		partMeta.PartNumber = partNum
 		parts = append(parts, partMeta)

@@ -47,7 +47,7 @@ func TestConcurrentUploads(t *testing.T) {
 				return
 			}
 			got, _ := io.ReadAll(reader)
-			reader.Close()
+			_ = reader.Close()
 
 			if !bytes.Equal(got, content) {
 				errors <- fmt.Errorf("content mismatch for file %d", idx)
@@ -104,7 +104,7 @@ func TestConcurrentOverwrites(t *testing.T) {
 		t.Fatalf("final GetObject failed: %v", err)
 	}
 	content, _ := io.ReadAll(reader)
-	reader.Close()
+	_ = reader.Close()
 
 	if meta.Size == 0 || len(content) == 0 {
 		t.Error("final file is empty")
@@ -146,7 +146,7 @@ func TestConcurrentDownloads(t *testing.T) {
 			}
 
 			got, err := io.ReadAll(reader)
-			reader.Close()
+			_ = reader.Close()
 			if err != nil {
 				errors <- fmt.Errorf("reader %d read failed: %w", readerID, err)
 				return
@@ -272,7 +272,7 @@ func TestConcurrentMixedOperations(t *testing.T) {
 				return
 			}
 			_, _ = io.ReadAll(reader)
-			reader.Close()
+			_ = reader.Close()
 		}(i)
 	}
 
@@ -436,7 +436,7 @@ func TestConcurrentReadsDuringWrite(t *testing.T) {
 					continue
 				}
 				content, err := io.ReadAll(reader)
-				reader.Close()
+				_ = reader.Close()
 				if err != nil {
 					atomic.AddInt64(&readErrors, 1)
 					continue
@@ -475,7 +475,7 @@ func TestConcurrentReadsDuringWrite(t *testing.T) {
 		t.Fatalf("final GetObject failed: %v", err)
 	}
 	finalContent, _ := io.ReadAll(reader)
-	reader.Close()
+	_ = reader.Close()
 
 	if len(finalContent) == 0 {
 		t.Error("final file is empty")
