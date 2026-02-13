@@ -270,6 +270,20 @@ Objects are stored on the filesystem organized by bucket, with a 4-character has
     ...
 ```
 
+## Limitations
+
+**ListObjectsV2 does not scale to large buckets.** Objects are stored under SHA-256 hash directories for even write distribution, which means there is no on-disk key ordering. It works well for get/put/delete operations that are O(1), but is expensive with ordered listing. Every ListObjectsV2 call must:
+
+1. Walk every directory in the bucket.
+2. Open and JSON-decode every `meta.json` to recover the original key.
+3. Sort all keys in memory.
+4. Apply prefix filtering, delimiter handling, and pagination.
+5. Re-open `meta.json` for the result page to load full metadata (object size and created timestamp).
+
+This is O(N) in disk I/O and O(N log N) in CPU per request, regardless of `max-keys`. Pagination does not reduce the work — the full walk and sort happens on every request. For buckets with many objects, this will be slow.
+
+The design is a tradeoff that prioritizes simplicity in implenentation and operation over performance, until a more efficient (and still simple) design pops up on the radar.
+
 ## Production Deployment
 
 HTTPS is not supported directly. Use a reverse proxy like Varnish or nginx in front of the service for TLS termination.
