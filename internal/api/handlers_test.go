@@ -1406,17 +1406,6 @@ func TestGetClientIPWithTrust(t *testing.T) {
 	trustedChecker := newTrustedProxyChecker([]string{"10.0.0.1", "172.16.0.0/12"})
 	untrustedChecker := newTrustedProxyChecker(nil)
 
-	t.Run("trusts X-Forwarded-For from trusted proxy", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/test", nil)
-		req.Header.Set("X-Forwarded-For", "192.168.1.1")
-		req.RemoteAddr = "10.0.0.1:1234"
-
-		got := getClientIPWithTrust(req, trustedChecker)
-		if got != "192.168.1.1" {
-			t.Errorf("getClientIPWithTrust() = %q, want %q", got, "192.168.1.1")
-		}
-	})
-
 	t.Run("trusts X-Real-IP from trusted proxy", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/test", nil)
 		req.Header.Set("X-Real-IP", "192.168.1.1")
@@ -1430,7 +1419,7 @@ func TestGetClientIPWithTrust(t *testing.T) {
 
 	t.Run("ignores proxy headers from untrusted source", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/test", nil)
-		req.Header.Set("X-Forwarded-For", "192.168.1.1")
+		req.Header.Set("X-Real-IP", "192.168.1.1")
 		req.RemoteAddr = "203.0.113.1:1234" // Not in trusted list
 
 		got := getClientIPWithTrust(req, trustedChecker)
@@ -1441,7 +1430,7 @@ func TestGetClientIPWithTrust(t *testing.T) {
 
 	t.Run("ignores proxy headers when no trusted proxies configured", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/test", nil)
-		req.Header.Set("X-Forwarded-For", "192.168.1.1")
+		req.Header.Set("X-Real-IP", "192.168.1.1")
 		req.RemoteAddr = "10.0.0.1:1234"
 
 		got := getClientIPWithTrust(req, untrustedChecker)
@@ -1452,7 +1441,7 @@ func TestGetClientIPWithTrust(t *testing.T) {
 
 	t.Run("trusts proxy from CIDR range", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/test", nil)
-		req.Header.Set("X-Forwarded-For", "192.168.1.1")
+		req.Header.Set("X-Real-IP", "192.168.1.1")
 		req.RemoteAddr = "172.20.0.5:1234" // In 172.16.0.0/12
 
 		got := getClientIPWithTrust(req, trustedChecker)
@@ -1461,15 +1450,15 @@ func TestGetClientIPWithTrust(t *testing.T) {
 		}
 	})
 
-	t.Run("X-Forwarded-For takes precedence over X-Real-IP", func(t *testing.T) {
+	t.Run("X-Forwarded-For is ignored in favor of X-Real-IP", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/test", nil)
 		req.Header.Set("X-Forwarded-For", "192.168.1.1")
 		req.Header.Set("X-Real-IP", "192.168.2.2")
 		req.RemoteAddr = "10.0.0.1:1234"
 
 		got := getClientIPWithTrust(req, trustedChecker)
-		if got != "192.168.1.1" {
-			t.Errorf("getClientIPWithTrust() = %q, want %q", got, "192.168.1.1")
+		if got != "192.168.2.2" {
+			t.Errorf("getClientIPWithTrust() = %q, want %q", got, "192.168.2.2")
 		}
 	})
 }

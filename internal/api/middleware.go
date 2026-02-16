@@ -258,18 +258,9 @@ func getClientIPWithTrust(r *http.Request, checker *trustedProxyChecker) string 
 
 	// Only trust proxy headers if the direct connection is from a trusted proxy
 	if checker != nil && checker.isTrusted(remoteIP) {
-		// Check X-Forwarded-For header (for proxies)
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			// Take the first IP in the list (original client)
-			if idx := strings.Index(xff, ","); idx != -1 {
-				return strings.TrimSpace(xff[:idx])
-			}
-			return strings.TrimSpace(xff)
-		}
-
-		// Check X-Real-IP header
-		if xri := r.Header.Get("X-Real-IP"); xri != "" {
-			return xri
+		clientIP := strings.TrimSpace(r.Header.Get("X-Real-IP"))
+		if clientIP != "" && net.ParseIP(clientIP) != nil {
+			return clientIP
 		}
 	}
 
