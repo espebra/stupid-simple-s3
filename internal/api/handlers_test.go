@@ -1335,7 +1335,7 @@ func TestAccessLogMiddleware(t *testing.T) {
 		}
 	})
 
-	t.Run("extracts client IP from X-Forwarded-For when trusted", func(t *testing.T) {
+	t.Run("ignores X-Forwarded-For even when trusted", func(t *testing.T) {
 		// httptest.NewRequest sets RemoteAddr to "192.0.2.1:1234"
 		handler := AccessLogMiddleware([]string{"192.0.2.1"})(dummyHandler)
 
