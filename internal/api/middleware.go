@@ -354,6 +354,11 @@ func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			if authHeader == "" {
 				time.Sleep(authFailureDelay) // Slow down brute-force attempts
 				metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonMissingHeader).Inc()
+				slog.Warn("auth failure: missing authorization header",
+					"request_id", GetRequestID(r),
+					"method", r.Method,
+					"path", r.URL.Path,
+				)
 				s3.WriteErrorResponse(w, s3.ErrAccessDenied)
 				return
 			}
@@ -362,6 +367,12 @@ func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			if err != nil {
 				time.Sleep(authFailureDelay)
 				metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonMalformedHeader).Inc()
+				slog.Warn("auth failure: malformed authorization header",
+					"request_id", GetRequestID(r),
+					"method", r.Method,
+					"path", r.URL.Path,
+					"error", err,
+				)
 				s3.WriteErrorResponse(w, s3.ErrAuthorizationHeaderMalformed)
 				return
 			}
@@ -371,6 +382,12 @@ func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			if cred == nil {
 				time.Sleep(authFailureDelay)
 				metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonInvalidAccessKey).Inc()
+				slog.Warn("auth failure: invalid access key",
+					"request_id", GetRequestID(r),
+					"method", r.Method,
+					"path", r.URL.Path,
+					"access_key_id", parsed.AccessKeyID,
+				)
 				s3.WriteErrorResponse(w, s3.ErrInvalidAccessKeyId)
 				return
 			}
@@ -382,10 +399,24 @@ func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 				// Check for specific error types
 				if strings.Contains(err.Error(), "skewed") {
 					metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonTimeSkew).Inc()
+					slog.Warn("auth failure: request time too skewed",
+						"request_id", GetRequestID(r),
+						"method", r.Method,
+						"path", r.URL.Path,
+						"access_key_id", parsed.AccessKeyID,
+						"error", err,
+					)
 					s3.WriteErrorResponse(w, s3.ErrRequestTimeTooSkewed)
 					return
 				}
 				metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonSignatureMismatch).Inc()
+				slog.Warn("auth failure: signature mismatch",
+					"request_id", GetRequestID(r),
+					"method", r.Method,
+					"path", r.URL.Path,
+					"access_key_id", parsed.AccessKeyID,
+					"error", err,
+				)
 				s3.WriteErrorResponse(w, s3.ErrSignatureDoesNotMatch)
 				return
 			}
@@ -404,6 +435,11 @@ func handlePresignedAuth(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	if accessKeyID == "" {
 		time.Sleep(authFailureDelay)
 		metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonMalformedHeader).Inc()
+		slog.Warn("auth failure: malformed presigned URL credential",
+			"request_id", GetRequestID(r),
+			"method", r.Method,
+			"path", r.URL.Path,
+		)
 		s3.WriteErrorResponse(w, s3.ErrAuthorizationHeaderMalformed)
 		return
 	}
@@ -413,6 +449,12 @@ func handlePresignedAuth(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	if cred == nil {
 		time.Sleep(authFailureDelay)
 		metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonInvalidAccessKey).Inc()
+		slog.Warn("auth failure: invalid access key (presigned)",
+			"request_id", GetRequestID(r),
+			"method", r.Method,
+			"path", r.URL.Path,
+			"access_key_id", accessKeyID,
+		)
 		s3.WriteErrorResponse(w, s3.ErrInvalidAccessKeyId)
 		return
 	}
@@ -424,15 +466,36 @@ func handlePresignedAuth(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		// Check for specific error types
 		if strings.Contains(err.Error(), "expired") {
 			metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonTimeSkew).Inc()
+			slog.Warn("auth failure: presigned URL expired",
+				"request_id", GetRequestID(r),
+				"method", r.Method,
+				"path", r.URL.Path,
+				"access_key_id", accessKeyID,
+				"error", err,
+			)
 			s3.WriteErrorResponse(w, s3.ErrExpiredToken)
 			return
 		}
 		if strings.Contains(err.Error(), "future") {
 			metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonTimeSkew).Inc()
+			slog.Warn("auth failure: presigned URL time in future",
+				"request_id", GetRequestID(r),
+				"method", r.Method,
+				"path", r.URL.Path,
+				"access_key_id", accessKeyID,
+				"error", err,
+			)
 			s3.WriteErrorResponse(w, s3.ErrRequestTimeTooSkewed)
 			return
 		}
 		metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonSignatureMismatch).Inc()
+		slog.Warn("auth failure: signature mismatch (presigned)",
+			"request_id", GetRequestID(r),
+			"method", r.Method,
+			"path", r.URL.Path,
+			"access_key_id", accessKeyID,
+			"error", err,
+		)
 		s3.WriteErrorResponse(w, s3.ErrSignatureDoesNotMatch)
 		return
 	}

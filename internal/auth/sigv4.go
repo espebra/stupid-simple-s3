@@ -320,7 +320,7 @@ func uriEncode(s string, encodeSlash bool) string {
 		} else if c == '/' && !encodeSlash {
 			result.WriteByte(c)
 		} else {
-			result.WriteString(fmt.Sprintf("%%%02X", c))
+			fmt.Fprintf(&result, "%%%02X", c)
 		}
 	}
 	return result.String()
