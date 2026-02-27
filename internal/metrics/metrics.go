@@ -60,14 +60,6 @@ var (
 		[]string{"operation", "error_code"},
 	)
 
-	// MultipartUploadsActive tracks number of active multipart uploads
-	MultipartUploadsActive = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "stupid_simple_s3_multipart_uploads_active",
-			Help: "Number of active multipart uploads",
-		},
-	)
-
 	// UploadsActive tracks number of currently active upload operations
 	UploadsActive = promauto.NewGauge(
 		prometheus.GaugeOpts{
@@ -136,6 +128,20 @@ const (
 	OpDeleteObjects           = "DeleteObjects"
 	OpUnknown                 = "Unknown"
 )
+
+// RegisterMultipartUploadsActive registers a gauge that reports the number
+// of active multipart uploads by querying actual state on each scrape.
+func RegisterMultipartUploadsActive(countFunc func() int) {
+	promauto.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Name: "stupid_simple_s3_multipart_uploads_active",
+			Help: "Number of active multipart uploads",
+		},
+		func() float64 {
+			return float64(countFunc())
+		},
+	)
+}
 
 // Auth failure reasons
 const (

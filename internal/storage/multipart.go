@@ -387,6 +387,22 @@ func (fs *FilesystemStorage) ListParts(uploadID string) ([]s3.PartMetadata, erro
 	return parts, nil
 }
 
+// CountActiveUploads returns the number of active multipart uploads
+// by counting directories in the multipart upload path.
+func (fs *FilesystemStorage) CountActiveUploads() int {
+	entries, err := os.ReadDir(fs.multipartPath)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			count++
+		}
+	}
+	return count
+}
+
 // CleanupStaleUploads removes multipart uploads older than maxAge
 // Returns the number of uploads cleaned up
 func (fs *FilesystemStorage) CleanupStaleUploads(maxAge time.Duration) (int, error) {

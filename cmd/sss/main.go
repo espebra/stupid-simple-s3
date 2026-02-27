@@ -50,6 +50,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Register multipart uploads gauge that reads actual state from disk
+	metrics.RegisterMultipartUploadsActive(store.CountActiveUploads)
+
 	// Count existing buckets for metrics
 	bucketsPath := filepath.Join(cfg.Storage.Path, "buckets")
 	if entries, err := os.ReadDir(bucketsPath); err == nil {

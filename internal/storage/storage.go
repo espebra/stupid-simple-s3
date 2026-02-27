@@ -85,4 +85,7 @@ type MultipartStorage interface {
 
 	// CleanupStaleUploads removes multipart uploads older than maxAge
 	CleanupStaleUploads(maxAge time.Duration) (int, error)
+
+	// CountActiveUploads returns the number of active multipart uploads
+	CountActiveUploads() int
 }
