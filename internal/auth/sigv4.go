@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -145,6 +146,12 @@ func (s *SignatureV4) VerifyRequest(r *http.Request, secretKey string) (*AuthRes
 
 	// Compare signatures
 	if !hmac.Equal([]byte(expectedSignature), []byte(parsed.Signature)) {
+		slog.Debug("signature mismatch",
+			"canonical_request", canonicalRequest,
+			"string_to_sign", stringToSign,
+			"expected_signature", expectedSignature,
+			"provided_signature", parsed.Signature,
+		)
 		return nil, fmt.Errorf("signature mismatch")
 	}
 
@@ -454,6 +461,12 @@ func (s *SignatureV4) VerifyPresignedRequest(r *http.Request, secretKey string) 
 
 	// Compare signatures
 	if !hmac.Equal([]byte(expectedSignature), []byte(parsed.Signature)) {
+		slog.Debug("presigned signature mismatch",
+			"canonical_request", canonicalRequest,
+			"string_to_sign", stringToSign,
+			"expected_signature", expectedSignature,
+			"provided_signature", parsed.Signature,
+		)
 		return nil, fmt.Errorf("signature mismatch")
 	}
 
