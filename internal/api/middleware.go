@@ -215,24 +215,35 @@ func AccessLogMiddleware(trustedProxies []string) func(http.Handler) http.Handle
 					"method", r.Method,
 					"path", r.URL.Path,
 					"status", rw.statusCode,
+					"bytes_in", cr.bytesRead,
+					"bytes_out", rw.bytesWritten,
 					"duration", duration.Seconds(),
+					"request_id", requestID,
 				)
 				return
 			}
 
 			operation := getOperationFromContext(r)
 
-			slog.Info("request",
-				"client_ip", clientIP,
-				"method", r.Method,
-				"path", r.URL.RequestURI(),
-				"status", rw.statusCode,
-				"bytes_in", cr.bytesRead,
-				"bytes_out", rw.bytesWritten,
-				"duration", duration.Seconds(),
-				"request_id", requestID,
-				"operation", operation,
-			)
+			attrs := []slog.Attr{
+				slog.String("client_ip", clientIP),
+				slog.String("method", r.Method),
+				slog.String("path", r.URL.RequestURI()),
+				slog.Int("status", rw.statusCode),
+				slog.Int64("bytes_in", cr.bytesRead),
+				slog.Int64("bytes_out", rw.bytesWritten),
+				slog.Float64("duration", duration.Seconds()),
+				slog.String("request_id", requestID),
+				slog.String("operation", operation),
+			}
+
+			if operation == metrics.OpGetObject {
+				if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
+					attrs = append(attrs, slog.String("range", rangeHeader))
+				}
+			}
+
+			slog.LogAttrs(r.Context(), slog.LevelInfo, "request", attrs...)
 		})
 	}
 }
@@ -357,7 +368,7 @@ func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			if authHeader == "" {
 				time.Sleep(authFailureDelay) // Slow down brute-force attempts
 				metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonMissingHeader).Inc()
-				slog.Warn("auth failure: missing authorization header",
+				slog.Debug("auth failure: missing authorization header",
 					"client_ip", clientIP,
 					"request_id", GetRequestID(r),
 					"method", r.Method,
@@ -371,7 +382,7 @@ func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			if err != nil {
 				time.Sleep(authFailureDelay)
 				metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonMalformedHeader).Inc()
-				slog.Warn("auth failure: malformed authorization header",
+				slog.Debug("auth failure: malformed authorization header",
 					"client_ip", clientIP,
 					"request_id", GetRequestID(r),
 					"method", r.Method,
@@ -387,7 +398,7 @@ func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			if cred == nil {
 				time.Sleep(authFailureDelay)
 				metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonInvalidAccessKey).Inc()
-				slog.Warn("auth failure: invalid access key",
+				slog.Debug("auth failure: invalid access key",
 					"client_ip", clientIP,
 					"request_id", GetRequestID(r),
 					"method", r.Method,
@@ -405,7 +416,7 @@ func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 				// Check for specific error types
 				if strings.Contains(err.Error(), "skewed") {
 					metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonTimeSkew).Inc()
-					slog.Warn("auth failure: request time too skewed",
+					slog.Debug("auth failure: request time too skewed",
 						"client_ip", clientIP,
 						"request_id", GetRequestID(r),
 						"method", r.Method,
@@ -417,7 +428,7 @@ func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 					return
 				}
 				metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonSignatureMismatch).Inc()
-				slog.Warn("auth failure: signature mismatch",
+				slog.Debug("auth failure: signature mismatch",
 					"client_ip", clientIP,
 					"request_id", GetRequestID(r),
 					"method", r.Method,
@@ -445,7 +456,7 @@ func handlePresignedAuth(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	if accessKeyID == "" {
 		time.Sleep(authFailureDelay)
 		metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonMalformedHeader).Inc()
-		slog.Warn("auth failure: malformed presigned URL credential",
+		slog.Debug("auth failure: malformed presigned URL credential",
 			"client_ip", clientIP,
 			"request_id", GetRequestID(r),
 			"method", r.Method,
@@ -460,7 +471,7 @@ func handlePresignedAuth(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	if cred == nil {
 		time.Sleep(authFailureDelay)
 		metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonInvalidAccessKey).Inc()
-		slog.Warn("auth failure: invalid access key (presigned)",
+		slog.Debug("auth failure: invalid access key (presigned)",
 			"client_ip", clientIP,
 			"request_id", GetRequestID(r),
 			"method", r.Method,
@@ -478,7 +489,7 @@ func handlePresignedAuth(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		// Check for specific error types
 		if strings.Contains(err.Error(), "expired") {
 			metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonTimeSkew).Inc()
-			slog.Warn("auth failure: presigned URL expired",
+			slog.Debug("auth failure: presigned URL expired",
 				"client_ip", clientIP,
 				"request_id", GetRequestID(r),
 				"method", r.Method,
@@ -491,7 +502,7 @@ func handlePresignedAuth(w http.ResponseWriter, r *http.Request, cfg *config.Con
 		}
 		if strings.Contains(err.Error(), "future") {
 			metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonTimeSkew).Inc()
-			slog.Warn("auth failure: presigned URL time in future",
+			slog.Debug("auth failure: presigned URL time in future",
 				"client_ip", clientIP,
 				"request_id", GetRequestID(r),
 				"method", r.Method,
@@ -503,7 +514,7 @@ func handlePresignedAuth(w http.ResponseWriter, r *http.Request, cfg *config.Con
 			return
 		}
 		metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonSignatureMismatch).Inc()
-		slog.Warn("auth failure: signature mismatch (presigned)",
+		slog.Debug("auth failure: signature mismatch (presigned)",
 			"client_ip", clientIP,
 			"request_id", GetRequestID(r),
 			"method", r.Method,
