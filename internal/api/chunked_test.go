@@ -17,7 +17,7 @@ func encodeAWSChunked(data []byte, chunkSizes ...int) string {
 		if offset+size > len(data) {
 			size = len(data) - offset
 		}
-		buf.WriteString(fmt.Sprintf("%x;chunk-signature=abc123\r\n", size))
+		fmt.Fprintf(&buf, "%x;chunk-signature=abc123\r\n", size)
 		buf.Write(data[offset : offset+size])
 		buf.WriteString("\r\n")
 		offset += size
