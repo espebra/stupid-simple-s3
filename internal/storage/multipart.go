@@ -82,12 +82,9 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 	}
 	// Per-upload read lock: allows concurrent part uploads for the same upload
 	// while preventing deletion/completion of this specific upload.
-	ul := fs.acquireUploadLock(uploadID)
-	ul.mu.RLock()
-	defer func() {
-		ul.mu.RUnlock()
-		fs.releaseUploadLock(uploadID)
-	}()
+	mu := fs.getUploadLock(uploadID)
+	mu.RLock()
+	defer mu.RUnlock()
 
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
@@ -157,12 +154,9 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	}
 	// Per-upload exclusive lock: waits for in-flight part uploads to finish,
 	// then prevents new ones while we assemble the final object.
-	ul := fs.acquireUploadLock(uploadID)
-	ul.mu.Lock()
-	defer func() {
-		ul.mu.Unlock()
-		fs.releaseUploadLock(uploadID)
-	}()
+	mu := fs.getUploadLock(uploadID)
+	mu.Lock()
+	defer mu.Unlock()
 
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
@@ -328,12 +322,9 @@ func (fs *FilesystemStorage) AbortMultipartUpload(uploadID string) error {
 		return ErrUploadNotFound
 	}
 	// Per-upload exclusive lock: waits for in-flight part uploads to finish.
-	ul := fs.acquireUploadLock(uploadID)
-	ul.mu.Lock()
-	defer func() {
-		ul.mu.Unlock()
-		fs.releaseUploadLock(uploadID)
-	}()
+	mu := fs.getUploadLock(uploadID)
+	mu.Lock()
+	defer mu.Unlock()
 
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
@@ -353,12 +344,9 @@ func (fs *FilesystemStorage) GetMultipartUpload(uploadID string) (*s3.MultipartU
 	if err := validateUploadID(uploadID); err != nil {
 		return nil, ErrUploadNotFound
 	}
-	ul := fs.acquireUploadLock(uploadID)
-	ul.mu.RLock()
-	defer func() {
-		ul.mu.RUnlock()
-		fs.releaseUploadLock(uploadID)
-	}()
+	mu := fs.getUploadLock(uploadID)
+	mu.RLock()
+	defer mu.RUnlock()
 	return fs.getMultipartUploadInternal(uploadID)
 }
 
@@ -389,12 +377,9 @@ func (fs *FilesystemStorage) ListParts(uploadID string) ([]s3.PartMetadata, erro
 	if err := validateUploadID(uploadID); err != nil {
 		return nil, ErrUploadNotFound
 	}
-	ul := fs.acquireUploadLock(uploadID)
-	ul.mu.RLock()
-	defer func() {
-		ul.mu.RUnlock()
-		fs.releaseUploadLock(uploadID)
-	}()
+	mu := fs.getUploadLock(uploadID)
+	mu.RLock()
+	defer mu.RUnlock()
 
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
@@ -493,17 +478,25 @@ func (fs *FilesystemStorage) CleanupStaleUploads(maxAge time.Duration) (int, err
 		}
 	}
 
+	// Evict lock map entries for uploads that no longer exist on disk
+	// (completed, aborted, or just cleaned up above).
+	fs.uploadLocks.Range(func(key, value any) bool {
+		uploadID := key.(string)
+		dir := filepath.Join(fs.multipartPath, uploadID)
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			fs.uploadLocks.Delete(key)
+		}
+		return true
+	})
+
 	return cleaned, nil
 }
 
 // cleanupUploadIfStale checks if an upload is stale and removes it atomically
 func (fs *FilesystemStorage) cleanupUploadIfStale(uploadID string, cutoff time.Time, entry os.DirEntry) bool {
-	ul := fs.acquireUploadLock(uploadID)
-	ul.mu.Lock()
-	defer func() {
-		ul.mu.Unlock()
-		fs.releaseUploadLock(uploadID)
-	}()
+	mu := fs.getUploadLock(uploadID)
+	mu.Lock()
+	defer mu.Unlock()
 
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
