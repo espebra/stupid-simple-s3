@@ -125,13 +125,21 @@ func ValidateBucketName(name string) error {
 	return nil
 }
 
+// uploadLock is a per-upload mutex with a reference count.
+// When refCount drops to zero the entry can be evicted from the map.
+type uploadLock struct {
+	mu       sync.RWMutex
+	refCount int
+}
+
 // FilesystemStorage implements Storage using the local filesystem
 type FilesystemStorage struct {
 	basePath      string
 	multipartPath string
-	// uploadMu protects multipart upload operations to prevent race conditions
-	// between concurrent uploads, aborts, and cleanup operations
-	uploadMu sync.RWMutex
+	// uploadLocks holds a per-upload RWMutex so that operations on different
+	// uploads never block each other. The map itself is protected by locksMu.
+	locksMu     sync.Mutex
+	uploadLocks map[string]*uploadLock
 }
 
 // NewFilesystemStorage creates a new filesystem-backed storage
@@ -157,6 +165,7 @@ func NewFilesystemStorage(basePath, multipartPath string) (*FilesystemStorage, e
 	return &FilesystemStorage{
 		basePath:      basePath,
 		multipartPath: multipartPath,
+		uploadLocks:   make(map[string]*uploadLock),
 	}, nil
 }
 
@@ -701,6 +710,36 @@ func (fs *FilesystemStorage) CopyObject(srcBucket, srcKey, dstBucket, dstKey str
 	}
 
 	return dstMeta, nil
+}
+
+// acquireUploadLock returns the per-upload lock for uploadID, creating it if
+// needed, and increments its reference count. The caller must call
+// releaseUploadLock when done.
+func (fs *FilesystemStorage) acquireUploadLock(uploadID string) *uploadLock {
+	fs.locksMu.Lock()
+	defer fs.locksMu.Unlock()
+	ul, ok := fs.uploadLocks[uploadID]
+	if !ok {
+		ul = &uploadLock{}
+		fs.uploadLocks[uploadID] = ul
+	}
+	ul.refCount++
+	return ul
+}
+
+// releaseUploadLock decrements the reference count for uploadID and removes
+// the entry from the map when no goroutines reference it any longer.
+func (fs *FilesystemStorage) releaseUploadLock(uploadID string) {
+	fs.locksMu.Lock()
+	defer fs.locksMu.Unlock()
+	ul, ok := fs.uploadLocks[uploadID]
+	if !ok {
+		return
+	}
+	ul.refCount--
+	if ul.refCount <= 0 {
+		delete(fs.uploadLocks, uploadID)
+	}
 }
 
 // Helper functions

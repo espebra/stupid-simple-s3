@@ -747,6 +747,37 @@ func TestGetMultipartUploadNotFound(t *testing.T) {
 	}
 }
 
+func TestMultipartUploadRejectsInvalidUploadID(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	maliciousIDs := []string{
+		"../etc/passwd",
+		"foo/../bar",
+		"not-a-uuid",
+		"../../multipart/real-dir",
+		"ab/cd",
+	}
+
+	for _, id := range maliciousIDs {
+		if _, err := storage.GetMultipartUpload(id); err == nil {
+			t.Errorf("GetMultipartUpload(%q): expected error", id)
+		}
+		if _, err := storage.UploadPart(id, 1, strings.NewReader("data")); err == nil {
+			t.Errorf("UploadPart(%q): expected error", id)
+		}
+		if _, err := storage.CompleteMultipartUpload(id, nil); err == nil {
+			t.Errorf("CompleteMultipartUpload(%q): expected error", id)
+		}
+		if err := storage.AbortMultipartUpload(id); err == nil {
+			t.Errorf("AbortMultipartUpload(%q): expected error", id)
+		}
+		if _, err := storage.ListParts(id); err == nil {
+			t.Errorf("ListParts(%q): expected error", id)
+		}
+	}
+}
+
 func TestCompleteMultipartUploadInvalidPartOrder(t *testing.T) {
 	storage, cleanup := setupTestStorage(t)
 	defer cleanup()

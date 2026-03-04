@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,18 @@ import (
 
 	"github.com/espen/stupid-simple-s3/internal/s3"
 )
+
+// ErrInvalidUploadID is returned when an upload ID is not a valid UUID
+var ErrInvalidUploadID = errors.New("invalid upload ID")
+
+// validateUploadID checks that the upload ID is a valid UUID.
+// This prevents path traversal attacks since upload IDs are used in filesystem paths.
+func validateUploadID(uploadID string) error {
+	if err := uuid.Validate(uploadID); err != nil {
+		return fmt.Errorf("%w: %s", ErrInvalidUploadID, uploadID)
+	}
+	return nil
+}
 
 // CreateMultipartUpload initializes a new multipart upload
 func (fs *FilesystemStorage) CreateMultipartUpload(bucket, key string, contentType string, metadata map[string]string) (string, error) {
@@ -64,9 +77,17 @@ func (fs *FilesystemStorage) CreateMultipartUpload(bucket, key string, contentTy
 
 // UploadPart stores a part of a multipart upload
 func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io.Reader) (*s3.PartMetadata, error) {
-	// Use read lock to allow concurrent part uploads while preventing deletion
-	fs.uploadMu.RLock()
-	defer fs.uploadMu.RUnlock()
+	if err := validateUploadID(uploadID); err != nil {
+		return nil, ErrUploadNotFound
+	}
+	// Per-upload read lock: allows concurrent part uploads for the same upload
+	// while preventing deletion/completion of this specific upload.
+	ul := fs.acquireUploadLock(uploadID)
+	ul.mu.RLock()
+	defer func() {
+		ul.mu.RUnlock()
+		fs.releaseUploadLock(uploadID)
+	}()
 
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
@@ -131,9 +152,17 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 
 // CompleteMultipartUpload assembles all parts into the final object
 func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3.CompletedPartInput) (*s3.ObjectMetadata, error) {
-	// Use exclusive lock to prevent concurrent modifications during completion
-	fs.uploadMu.Lock()
-	defer fs.uploadMu.Unlock()
+	if err := validateUploadID(uploadID); err != nil {
+		return nil, ErrUploadNotFound
+	}
+	// Per-upload exclusive lock: waits for in-flight part uploads to finish,
+	// then prevents new ones while we assemble the final object.
+	ul := fs.acquireUploadLock(uploadID)
+	ul.mu.Lock()
+	defer func() {
+		ul.mu.Unlock()
+		fs.releaseUploadLock(uploadID)
+	}()
 
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
@@ -207,7 +236,7 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	}
 
 	dataPath := filepath.Join(objPath, "data")
-	tmpPath := dataPath + ".tmp"
+	tmpPath := dataPath + ".tmp." + uploadID
 
 	// Concatenate all parts
 	outFile, err := os.Create(tmpPath)
@@ -263,16 +292,28 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 		UserMetadata: uploadMeta.UserMetadata,
 	}
 
-	// Write metadata
+	// Write metadata atomically using temp file and rename
 	metaPath := filepath.Join(objPath, "meta.json")
-	metaFile, err := os.Create(metaPath)
+	metaTmpPath := metaPath + ".tmp." + uploadID
+	metaFile, err := os.Create(metaTmpPath)
 	if err != nil {
 		return nil, fmt.Errorf("creating metadata file: %w", err)
 	}
-	defer func() { _ = metaFile.Close() }()
 
 	if err := json.NewEncoder(metaFile).Encode(objMeta); err != nil {
+		_ = metaFile.Close()
+		_ = os.Remove(metaTmpPath)
 		return nil, fmt.Errorf("writing metadata: %w", err)
+	}
+
+	if err := metaFile.Close(); err != nil {
+		_ = os.Remove(metaTmpPath)
+		return nil, fmt.Errorf("closing metadata file: %w", err)
+	}
+
+	if err := os.Rename(metaTmpPath, metaPath); err != nil {
+		_ = os.Remove(metaTmpPath)
+		return nil, fmt.Errorf("renaming metadata file: %w", err)
 	}
 
 	// Clean up multipart upload directory
@@ -283,9 +324,16 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 
 // AbortMultipartUpload cancels a multipart upload and cleans up parts
 func (fs *FilesystemStorage) AbortMultipartUpload(uploadID string) error {
-	// Use exclusive lock to prevent concurrent access during deletion
-	fs.uploadMu.Lock()
-	defer fs.uploadMu.Unlock()
+	if err := validateUploadID(uploadID); err != nil {
+		return ErrUploadNotFound
+	}
+	// Per-upload exclusive lock: waits for in-flight part uploads to finish.
+	ul := fs.acquireUploadLock(uploadID)
+	ul.mu.Lock()
+	defer func() {
+		ul.mu.Unlock()
+		fs.releaseUploadLock(uploadID)
+	}()
 
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
@@ -302,8 +350,15 @@ func (fs *FilesystemStorage) AbortMultipartUpload(uploadID string) error {
 
 // GetMultipartUpload retrieves metadata about a multipart upload
 func (fs *FilesystemStorage) GetMultipartUpload(uploadID string) (*s3.MultipartUploadMetadata, error) {
-	fs.uploadMu.RLock()
-	defer fs.uploadMu.RUnlock()
+	if err := validateUploadID(uploadID); err != nil {
+		return nil, ErrUploadNotFound
+	}
+	ul := fs.acquireUploadLock(uploadID)
+	ul.mu.RLock()
+	defer func() {
+		ul.mu.RUnlock()
+		fs.releaseUploadLock(uploadID)
+	}()
 	return fs.getMultipartUploadInternal(uploadID)
 }
 
@@ -331,8 +386,15 @@ func (fs *FilesystemStorage) getMultipartUploadInternal(uploadID string) (*s3.Mu
 
 // ListParts returns the parts uploaded for a multipart upload
 func (fs *FilesystemStorage) ListParts(uploadID string) ([]s3.PartMetadata, error) {
-	fs.uploadMu.RLock()
-	defer fs.uploadMu.RUnlock()
+	if err := validateUploadID(uploadID); err != nil {
+		return nil, ErrUploadNotFound
+	}
+	ul := fs.acquireUploadLock(uploadID)
+	ul.mu.RLock()
+	defer func() {
+		ul.mu.RUnlock()
+		fs.releaseUploadLock(uploadID)
+	}()
 
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
@@ -436,8 +498,12 @@ func (fs *FilesystemStorage) CleanupStaleUploads(maxAge time.Duration) (int, err
 
 // cleanupUploadIfStale checks if an upload is stale and removes it atomically
 func (fs *FilesystemStorage) cleanupUploadIfStale(uploadID string, cutoff time.Time, entry os.DirEntry) bool {
-	fs.uploadMu.Lock()
-	defer fs.uploadMu.Unlock()
+	ul := fs.acquireUploadLock(uploadID)
+	ul.mu.Lock()
+	defer func() {
+		ul.mu.Unlock()
+		fs.releaseUploadLock(uploadID)
+	}()
 
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
@@ -468,4 +534,43 @@ func (fs *FilesystemStorage) cleanupUploadIfStale(uploadID string, cutoff time.T
 	}
 
 	return false
+}
+
+// CleanupStaleTempFiles removes orphaned .tmp.* files from object directories.
+// These can be left behind by PutObject or CompleteMultipartUpload that failed
+// or was interrupted after creating the temp file but before renaming it.
+func (fs *FilesystemStorage) CleanupStaleTempFiles(maxAge time.Duration) (int, error) {
+	bucketsPath := filepath.Join(fs.basePath, "buckets")
+	cutoff := time.Now().Add(-maxAge)
+	cleaned := 0
+
+	err := filepath.WalkDir(bucketsPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip directories we can't read
+		}
+		if d.IsDir() {
+			return nil
+		}
+
+		name := d.Name()
+		if !strings.Contains(name, ".tmp.") {
+			return nil
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		if info.ModTime().Before(cutoff) {
+			if os.Remove(path) == nil {
+				cleaned++
+			}
+		}
+		return nil
+	})
+
+	if err != nil && !os.IsNotExist(err) {
+		return cleaned, fmt.Errorf("walking buckets directory: %w", err)
+	}
+	return cleaned, nil
 }
