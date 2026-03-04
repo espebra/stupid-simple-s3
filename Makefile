@@ -19,25 +19,35 @@ test:
 bench:
 	go test -mod=vendor -bench=. -benchmem ./...
 
+FUZZ_DURATION ?= 1h
+SHORTFUZZ_DURATION ?= 30s
+
+# Fuzz targets: package:FuncName
+FUZZ_TARGETS = \
+	./internal/auth/:FuzzParseAuthorization \
+	./internal/auth/:FuzzParsePresignedURL \
+	./internal/auth/:FuzzURIEncode \
+	./internal/auth/:FuzzIsValidIPHeader \
+	./internal/auth/:FuzzBuildCanonicalQueryStringSingle \
+	./internal/auth/:FuzzBuildCanonicalQueryStringMultiple \
+	./internal/auth/:FuzzGetPresignedAccessKeyID \
+	./internal/auth/:FuzzBuildCanonicalHeaders \
+	./internal/api/:FuzzAWSChunkedReader
+
+# Run fuzz targets, then replay any corpus failures found.
+# go test -fuzz exits non-zero on timeout, so we ignore its exit code
+# and rely on the final replay pass to detect real failures.
 fuzz:
-	go test -fuzz=FuzzParseAuthorization -fuzztime=1h ./internal/auth/
-	go test -fuzz=FuzzParsePresignedURL -fuzztime=1h ./internal/auth/
-	go test -fuzz=FuzzURIEncode -fuzztime=1h ./internal/auth/
-	go test -fuzz=FuzzIsValidIPHeader -fuzztime=1h ./internal/auth/
-	go test -fuzz=FuzzBuildCanonicalQueryStringSingle -fuzztime=1h ./internal/auth/
-	go test -fuzz=FuzzBuildCanonicalQueryStringMultiple -fuzztime=1h ./internal/auth/
-	go test -fuzz=FuzzGetPresignedAccessKeyID -fuzztime=1h ./internal/auth/
-	go test -fuzz=FuzzBuildCanonicalHeaders -fuzztime=1h ./internal/auth/
+	@for target in $(FUZZ_TARGETS); do \
+		pkg=$${target%%:*}; func=$${target##*:}; \
+		echo "--- fuzzing $$func ($$pkg) ---"; \
+		go test -fuzz=$$func -fuzztime=$(FUZZ_DURATION) $$pkg || true; \
+	done
+	@echo "--- replaying corpus ---"
+	go test ./internal/auth/ ./internal/api/
 
 shortfuzz:
-	go test -fuzz=FuzzParseAuthorization -fuzztime=30s ./internal/auth/
-	go test -fuzz=FuzzParsePresignedURL -fuzztime=30s ./internal/auth/
-	go test -fuzz=FuzzURIEncode -fuzztime=30s ./internal/auth/
-	go test -fuzz=FuzzIsValidIPHeader -fuzztime=30s ./internal/auth/
-	go test -fuzz=FuzzBuildCanonicalQueryStringSingle -fuzztime=30s ./internal/auth/
-	go test -fuzz=FuzzBuildCanonicalQueryStringMultiple -fuzztime=30s ./internal/auth/
-	go test -fuzz=FuzzGetPresignedAccessKeyID -fuzztime=30s ./internal/auth/
-	go test -fuzz=FuzzBuildCanonicalHeaders -fuzztime=30s ./internal/auth/
+	@$(MAKE) fuzz FUZZ_DURATION=$(SHORTFUZZ_DURATION)
 
 clean:
 	rm -rf $(BUILD_DIR)

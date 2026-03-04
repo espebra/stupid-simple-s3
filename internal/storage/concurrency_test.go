@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/espen/stupid-simple-s3/internal/s3"
 )
@@ -547,5 +548,283 @@ func TestConcurrentMultipartPartsOnSameUpload(t *testing.T) {
 	expectedSize := int64(numParts * partSize)
 	if objMeta.Size != expectedSize {
 		t.Errorf("Size = %d, want %d", objMeta.Size, expectedSize)
+	}
+}
+
+// TestConcurrentCompleteDoesNotBlockPartUploads verifies that completing one
+// multipart upload does not block part uploads on a different upload.
+// This is the convoy scenario that the per-upload locking fixes.
+func TestConcurrentCompleteDoesNotBlockPartUploads(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	const partSize = 1024
+
+	// Create two independent multipart uploads
+	uploadA, err := storage.CreateMultipartUpload(testBucket, "key-a.bin", "application/octet-stream", nil)
+	if err != nil {
+		t.Fatalf("create upload A: %v", err)
+	}
+	uploadB, err := storage.CreateMultipartUpload(testBucket, "key-b.bin", "application/octet-stream", nil)
+	if err != nil {
+		t.Fatalf("create upload B: %v", err)
+	}
+
+	// Upload parts for both
+	makeContent := func(seed int) []byte {
+		c := make([]byte, partSize)
+		for i := range c {
+			c[i] = byte((seed + i) % 256)
+		}
+		return c
+	}
+
+	for p := 1; p <= 5; p++ {
+		if _, err := storage.UploadPart(uploadA, p, bytes.NewReader(makeContent(p))); err != nil {
+			t.Fatalf("upload A part %d: %v", p, err)
+		}
+	}
+
+	etagsB := make([]string, 3)
+	for p := 1; p <= 3; p++ {
+		meta, err := storage.UploadPart(uploadB, p, bytes.NewReader(makeContent(100+p)))
+		if err != nil {
+			t.Fatalf("upload B part %d: %v", p, err)
+		}
+		etagsB[p-1] = meta.ETag
+	}
+
+	// Now concurrently: complete upload A while uploading more parts to B
+	var wg sync.WaitGroup
+	errs := make(chan error, 10)
+
+	// Complete A (takes exclusive lock on A only)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		parts := make([]s3.CompletedPartInput, 5)
+		// Need ETags for A; re-upload to get them
+		for p := 1; p <= 5; p++ {
+			meta, err := storage.UploadPart(uploadA, p, bytes.NewReader(makeContent(p)))
+			if err != nil {
+				errs <- fmt.Errorf("re-upload A part %d: %w", p, err)
+				return
+			}
+			parts[p-1] = s3.CompletedPartInput{PartNumber: p, ETag: meta.ETag}
+		}
+		if _, err := storage.CompleteMultipartUpload(uploadA, parts); err != nil {
+			errs <- fmt.Errorf("complete A: %w", err)
+		}
+	}()
+
+	// Upload additional parts to B concurrently (should not be blocked by A's completion)
+	for p := 4; p <= 8; p++ {
+		wg.Add(1)
+		go func(partNum int) {
+			defer wg.Done()
+			if _, err := storage.UploadPart(uploadB, partNum, bytes.NewReader(makeContent(100+partNum))); err != nil {
+				errs <- fmt.Errorf("upload B part %d: %w", partNum, err)
+			}
+		}(p)
+	}
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+// TestAbortDuringPartUpload verifies that aborting an upload waits for
+// in-flight part uploads to finish before removing the directory.
+func TestAbortDuringPartUpload(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	const numParts = 10
+	const partSize = 4096
+
+	uploadID, err := storage.CreateMultipartUpload(testBucket, "abort-race.bin", "application/octet-stream", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Start uploading parts concurrently
+	var wg sync.WaitGroup
+	partStarted := make(chan struct{})
+
+	for p := 1; p <= numParts; p++ {
+		wg.Add(1)
+		go func(partNum int) {
+			defer wg.Done()
+			content := make([]byte, partSize)
+			if partNum == 1 {
+				close(partStarted) // signal that at least one part is in progress
+			}
+			// Ignore errors — some parts may fail due to abort
+			_, _ = storage.UploadPart(uploadID, partNum, bytes.NewReader(content))
+		}(p)
+	}
+
+	// Wait for at least one part to start, then abort
+	<-partStarted
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = storage.AbortMultipartUpload(uploadID)
+	}()
+
+	wg.Wait()
+
+	// After abort completes, the upload should be gone
+	_, err = storage.GetMultipartUpload(uploadID)
+	if err == nil {
+		t.Error("upload should not exist after abort")
+	}
+}
+
+// TestCleanupDuringActiveUploads verifies that the cleanup job does not
+// interfere with active uploads or cause data corruption.
+func TestCleanupDuringActiveUploads(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	const partSize = 1024
+
+	// Create an active upload (recent, should not be cleaned up)
+	uploadID, err := storage.CreateMultipartUpload(testBucket, "active.bin", "application/octet-stream", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 20)
+
+	// Upload parts concurrently
+	etags := make([]string, 5)
+	var mu sync.Mutex
+	for p := 1; p <= 5; p++ {
+		wg.Add(1)
+		go func(partNum int) {
+			defer wg.Done()
+			content := make([]byte, partSize)
+			meta, err := storage.UploadPart(uploadID, partNum, bytes.NewReader(content))
+			if err != nil {
+				errs <- fmt.Errorf("part %d: %w", partNum, err)
+				return
+			}
+			mu.Lock()
+			etags[partNum-1] = meta.ETag
+			mu.Unlock()
+		}(p)
+	}
+
+	// Run cleanup concurrently with a short maxAge that won't affect our new upload
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// maxAge=1h means our just-created upload won't be cleaned
+		if _, err := storage.CleanupStaleUploads(1 * time.Hour); err != nil {
+			errs <- fmt.Errorf("cleanup: %w", err)
+		}
+	}()
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+
+	// The active upload should still be completable
+	parts := make([]s3.CompletedPartInput, 5)
+	for i := 0; i < 5; i++ {
+		parts[i] = s3.CompletedPartInput{PartNumber: i + 1, ETag: etags[i]}
+	}
+	objMeta, err := storage.CompleteMultipartUpload(uploadID, parts)
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if objMeta.Size != int64(5*partSize) {
+		t.Errorf("size = %d, want %d", objMeta.Size, 5*partSize)
+	}
+}
+
+// TestConcurrentCompleteSameKey verifies that two multipart uploads targeting
+// the same object key can complete concurrently without corrupting the object.
+func TestConcurrentCompleteSameKey(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	const partSize = 2048
+	const key = "same-key.bin"
+
+	// Create two uploads for the same key
+	createAndUpload := func(seed byte) (string, []s3.CompletedPartInput) {
+		uploadID, err := storage.CreateMultipartUpload(testBucket, key, "application/octet-stream", nil)
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		parts := make([]s3.CompletedPartInput, 3)
+		for p := 1; p <= 3; p++ {
+			content := make([]byte, partSize)
+			for i := range content {
+				content[i] = seed
+			}
+			meta, err := storage.UploadPart(uploadID, p, bytes.NewReader(content))
+			if err != nil {
+				t.Fatalf("part %d: %v", p, err)
+			}
+			parts[p-1] = s3.CompletedPartInput{PartNumber: p, ETag: meta.ETag}
+		}
+		return uploadID, parts
+	}
+
+	uploadA, partsA := createAndUpload(0xAA)
+	uploadB, partsB := createAndUpload(0xBB)
+
+	// Complete both concurrently
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+
+	for _, tc := range []struct {
+		id    string
+		parts []s3.CompletedPartInput
+	}{{uploadA, partsA}, {uploadB, partsB}} {
+		wg.Add(1)
+		go func(id string, parts []s3.CompletedPartInput) {
+			defer wg.Done()
+			if _, err := storage.CompleteMultipartUpload(id, parts); err != nil {
+				errs <- fmt.Errorf("complete %s: %w", id, err)
+			}
+		}(tc.id, tc.parts)
+	}
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+
+	// The object should exist and have consistent content (all one byte value)
+	reader, meta, err := storage.GetObject(testBucket, key)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	content, _ := io.ReadAll(reader)
+	_ = reader.Close()
+
+	if meta.Size != int64(3*partSize) {
+		t.Errorf("size = %d, want %d", meta.Size, 3*partSize)
+	}
+
+	// All bytes should be the same value (either 0xAA or 0xBB, depending on who won)
+	if len(content) > 0 {
+		expected := content[0]
+		for i, b := range content {
+			if b != expected {
+				t.Errorf("byte %d = %x, want %x (content corrupted by concurrent complete)", i, b, expected)
+				break
+			}
+		}
 	}
 }
