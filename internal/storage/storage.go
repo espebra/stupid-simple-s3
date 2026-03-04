@@ -86,6 +86,9 @@ type MultipartStorage interface {
 	// CleanupStaleUploads removes multipart uploads older than maxAge
 	CleanupStaleUploads(maxAge time.Duration) (int, error)
 
+	// CleanupStaleTempFiles removes orphaned temp files older than maxAge
+	CleanupStaleTempFiles(maxAge time.Duration) (int, error)
+
 	// CountActiveUploads returns the number of active multipart uploads
 	CountActiveUploads() int
 }

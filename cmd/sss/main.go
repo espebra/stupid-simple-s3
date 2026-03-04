@@ -151,7 +151,23 @@ func parseLogLevel(level string) slog.Level {
 	}
 }
 
-// runCleanupJob periodically cleans up stale multipart uploads
+func runCleanupCycle(store storage.MultipartStorage, maxAge time.Duration) {
+	cleaned, err := store.CleanupStaleUploads(maxAge)
+	if err != nil {
+		slog.Error("cleanup error", "error", err)
+	} else if cleaned > 0 {
+		slog.Info("cleaned up stale multipart uploads", "count", cleaned)
+	}
+
+	tmpCleaned, err := store.CleanupStaleTempFiles(maxAge)
+	if err != nil {
+		slog.Error("temp file cleanup error", "error", err)
+	} else if tmpCleaned > 0 {
+		slog.Info("cleaned up stale temp files", "count", tmpCleaned)
+	}
+}
+
+// runCleanupJob periodically cleans up stale multipart uploads and temp files
 func runCleanupJob(ctx context.Context, store storage.MultipartStorage, interval, maxAge time.Duration) {
 	slog.Info("starting multipart upload cleanup job",
 		"interval", interval.String(),
@@ -159,12 +175,7 @@ func runCleanupJob(ctx context.Context, store storage.MultipartStorage, interval
 	)
 
 	// Run immediately on startup
-	cleaned, err := store.CleanupStaleUploads(maxAge)
-	if err != nil {
-		slog.Error("cleanup error", "error", err)
-	} else if cleaned > 0 {
-		slog.Info("cleaned up stale multipart uploads", "count", cleaned)
-	}
+	runCleanupCycle(store, maxAge)
 
 	// Then run periodically
 	ticker := time.NewTicker(interval)
@@ -176,12 +187,7 @@ func runCleanupJob(ctx context.Context, store storage.MultipartStorage, interval
 			slog.Info("cleanup job stopped")
 			return
 		case <-ticker.C:
-			cleaned, err := store.CleanupStaleUploads(maxAge)
-			if err != nil {
-				slog.Error("cleanup error", "error", err)
-			} else if cleaned > 0 {
-				slog.Info("cleaned up stale multipart uploads", "count", cleaned)
-			}
+			runCleanupCycle(store, maxAge)
 		}
 	}
 }
