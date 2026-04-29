@@ -90,6 +90,8 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 SocketBindDeny=any
 # Allow binding only to TCP port 5553 (adjust if using different port via STUPID_PORT)
 SocketBindAllow=tcp:5553
+# Allow binding to TCP port 6060 for the pprof debug listener (STUPID_PPROF_ADDRESS)
+SocketBindAllow=tcp:6060
 
 # Namespace isolation
 
