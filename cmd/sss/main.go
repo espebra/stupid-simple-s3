@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -92,6 +93,13 @@ func main() {
 	// Create server
 	server := api.NewServer(cfg, store)
 
+	// Start pprof listener if configured. Bound to a separate address from the
+	// S3 listener so it can be kept off public interfaces.
+	var pprofServer *http.Server
+	if cfg.Pprof.Enabled() {
+		pprofServer = startPprofServer(cfg.Pprof.Address)
+	}
+
 	// Start server in goroutine
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -113,12 +121,45 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
 
+	if pprofServer != nil {
+		if err := pprofServer.Shutdown(ctx); err != nil {
+			slog.Error("pprof shutdown error", "error", err)
+		}
+	}
+
 	if err := server.Shutdown(ctx); err != nil {
 		slog.Error("shutdown error", "error", err)
 		os.Exit(1)
 	}
 
 	slog.Info("server stopped")
+}
+
+// startPprofServer starts a separate HTTP listener that exposes the standard
+// net/http/pprof endpoints under /debug/pprof/. The handlers are registered on
+// a private mux so they are never reachable on the main S3 listener.
+func startPprofServer(address string) *http.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	srv := &http.Server{
+		Addr:              address,
+		Handler:           mux,
+		ReadHeaderTimeout: api.ReadHeaderTimeout,
+	}
+
+	go func() {
+		slog.Info("starting pprof listener", "address", address)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("pprof listener error", "error", err)
+		}
+	}()
+
+	return srv
 }
 
 // configureLogger sets up the default slog logger
