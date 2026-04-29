@@ -107,6 +107,7 @@ The service is configured using environment variables:
 | `STUPID_SHUTDOWN_TIMEOUT` | Maximum duration for graceful shutdown | `30s` |
 | `STUPID_LOG_FORMAT` | Log output format (`text` or `json`) | `text` |
 | `STUPID_LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | `info` |
+| `STUPID_PPROF_ADDRESS` | Address for the pprof debug listener (e.g. `127.0.0.1:6060` or `:6060`). If only a port is given, the host defaults to `127.0.0.1`. Empty disables pprof. | (disabled) |
 
 At least one credential pair (read-only or read-write) must be provided.
 
@@ -248,6 +249,38 @@ scrape_configs:
     #   username: 'metrics_user'
     #   password: 'metrics_password'
 ```
+
+## Profiling with pprof
+
+The standard Go `net/http/pprof` endpoints can be exposed on a separate listener that is bound to a private address by default. They are never registered on the main S3 listener.
+
+Set `STUPID_PPROF_ADDRESS` to enable it:
+
+```bash
+export STUPID_PPROF_ADDRESS=127.0.0.1:6060
+```
+
+If only a port is given (e.g. `:6060`), the host defaults to `127.0.0.1` so the listener is not exposed on a public interface. Setting an explicit wildcard host (`0.0.0.0:6060`) is allowed but will log a warning at startup.
+
+Available endpoints (under `/debug/pprof/`):
+
+| Endpoint | Description |
+|----------|-------------|
+| `/debug/pprof/` | Index of available profiles |
+| `/debug/pprof/profile` | CPU profile (default 30s) |
+| `/debug/pprof/heap` | Heap allocations |
+| `/debug/pprof/goroutine` | Goroutine stacks |
+| `/debug/pprof/trace` | Execution trace |
+| `/debug/pprof/cmdline`, `/debug/pprof/symbol` | Process metadata |
+
+Example usage from the same host (or via SSH port-forward):
+
+```bash
+go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=30
+go tool pprof http://127.0.0.1:6060/debug/pprof/heap
+```
+
+The pprof endpoints expose internal program state and must not be reachable from untrusted networks.
 
 ## Filesystem layout for storage
 

@@ -111,6 +111,17 @@ type LogConfig struct {
 	Level  string // "debug", "info", "warn", "error"
 }
 
+// Pprof holds configuration for the pprof debug listener.
+// When Address is empty, the pprof listener is disabled.
+type Pprof struct {
+	Address string
+}
+
+// Enabled returns true if the pprof listener should be started.
+func (p *Pprof) Enabled() bool {
+	return p.Address != ""
+}
+
 type Config struct {
 	Bucket      Bucket
 	Storage     Storage
@@ -120,6 +131,7 @@ type Config struct {
 	MetricsAuth MetricsAuth
 	Limits      Limits
 	Log         LogConfig
+	Pprof       Pprof
 }
 
 // Load creates a configuration from environment variables.
@@ -147,6 +159,10 @@ type Config struct {
 //   - STUPID_SHUTDOWN_TIMEOUT: Maximum duration for graceful shutdown (default: "30s")
 //   - STUPID_LOG_FORMAT: Log output format, "json" or "text" (default: "text")
 //   - STUPID_LOG_LEVEL: Log level, "debug", "info", "warn", "error" (default: "info")
+//   - STUPID_PPROF_ADDRESS: Address for the pprof debug listener (e.g.
+//     "127.0.0.1:6060"). Use a loopback host to keep profiling data off public
+//     interfaces; ":6060" binds to all interfaces. Empty (default) disables the
+//     listener.
 func Load() (*Config, error) {
 	host := os.Getenv("STUPID_HOST")
 	port := os.Getenv("STUPID_PORT")
@@ -209,6 +225,9 @@ func Load() (*Config, error) {
 		Log: LogConfig{
 			Format: getEnvOrDefault("STUPID_LOG_FORMAT", "text"),
 			Level:  getEnvOrDefault("STUPID_LOG_LEVEL", "info"),
+		},
+		Pprof: Pprof{
+			Address: os.Getenv("STUPID_PPROF_ADDRESS"),
 		},
 	}
 
@@ -330,6 +349,8 @@ func (c *Config) LogConfiguration() {
 		"credentials_count", len(c.Credentials),
 		"log_format", c.Log.Format,
 		"log_level", c.Log.Level,
+		"pprof_enabled", c.Pprof.Enabled(),
+		"pprof_address", c.Pprof.Address,
 	)
 	for i, cred := range c.Credentials {
 		slog.Info("credential configured",
