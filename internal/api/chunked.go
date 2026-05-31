@@ -52,12 +52,12 @@ func (r *awsChunkedReader) Read(p []byte) (n int, err error) {
 		}
 
 		// Read chunk data
-		toRead := int64(len(p) - n)
-		if toRead > r.remaining {
-			toRead = r.remaining
+		toRead := len(p) - n
+		if r.remaining < int64(toRead) {
+			toRead = int(r.remaining)
 		}
 
-		read, err := r.reader.Read(p[n : n+int(toRead)])
+		read, err := r.reader.Read(p[n : n+toRead])
 		n += read
 		r.remaining -= int64(read)
 		r.totalRead += int64(read)
