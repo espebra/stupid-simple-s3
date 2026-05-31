@@ -352,6 +352,12 @@ func (fs *FilesystemStorage) GetMultipartUpload(uploadID string) (*s3.MultipartU
 
 // getMultipartUploadInternal retrieves metadata without acquiring lock (caller must hold lock)
 func (fs *FilesystemStorage) getMultipartUploadInternal(uploadID string) (*s3.MultipartUploadMetadata, error) {
+	// Guard against unvalidated IDs reaching a path expression, in case a future
+	// caller forgets the validateUploadID check its current callers perform.
+	if err := validateUploadID(uploadID); err != nil {
+		return nil, ErrUploadNotFound
+	}
+
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 	metaPath := filepath.Join(uploadPath, "meta.json")
 
