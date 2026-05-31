@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -55,6 +56,9 @@ func (r *awsChunkedReader) Read(p []byte) (n int, err error) {
 		// int) and is only ever reduced, so it always fits back into an int.
 		toRead := len(p) - n
 		if int64(toRead) > r.remaining {
+			if r.remaining > int64(math.MaxInt) {
+				return n, fmt.Errorf("chunk size too large for platform int: %d", r.remaining)
+			}
 			toRead = int(r.remaining)
 		}
 
