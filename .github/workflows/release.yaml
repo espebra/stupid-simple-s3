@@ -12,6 +12,8 @@ env:
 jobs:
   bench:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -25,6 +27,8 @@ jobs:
 
   build-binaries:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -43,6 +47,8 @@ jobs:
 
   build-packages:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: [build-binaries]
     strategy:
       matrix:
