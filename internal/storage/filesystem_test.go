@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -668,9 +669,61 @@ func TestMultipartUpload(t *testing.T) {
 		t.Error("multipart content mismatch")
 	}
 
-	// ETag should have multipart format (hash-numparts)
-	if !strings.Contains(objMeta.ETag, "-3") {
+	// ETag should have multipart format (...-numparts)
+	if !strings.HasSuffix(objMeta.ETag, "-3\"") {
 		t.Errorf("ETag should indicate 3 parts: %q", objMeta.ETag)
+	}
+
+	// Checksum covers the full object, not the parts
+	if want := EncodeCRC32(crc32.ChecksumIEEE(expectedContent)); objMeta.ChecksumCRC32 != want {
+		t.Errorf("ChecksumCRC32 = %q, want %q", objMeta.ChecksumCRC32, want)
+	}
+	if want := EncodeCRC32(crc32.ChecksumIEEE(part1Content)); part1Meta.ChecksumCRC32 != want {
+		t.Errorf("part 1 ChecksumCRC32 = %q, want %q", part1Meta.ChecksumCRC32, want)
+	}
+}
+
+func TestEncodeCRC32(t *testing.T) {
+	// Standard CRC-32 check value for "123456789" is 0xcbf43926
+	if got := EncodeCRC32(crc32.ChecksumIEEE([]byte("123456789"))); got != "y/Q5Jg==" {
+		t.Errorf("EncodeCRC32 = %q, want %q", got, "y/Q5Jg==")
+	}
+}
+
+func TestObjectChecksumAndETag(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	content := []byte("same content")
+	meta1, err := storage.PutObject(testBucket, "etag.txt", "text/plain", nil, bytes.NewReader(content))
+	if err != nil {
+		t.Fatalf("PutObject failed: %v", err)
+	}
+	meta2, err := storage.PutObject(testBucket, "etag.txt", "text/plain", nil, bytes.NewReader(content))
+	if err != nil {
+		t.Fatalf("PutObject failed: %v", err)
+	}
+
+	if want := EncodeCRC32(crc32.ChecksumIEEE(content)); meta1.ChecksumCRC32 != want {
+		t.Errorf("ChecksumCRC32 = %q, want %q", meta1.ChecksumCRC32, want)
+	}
+
+	// Rewriting identical content must still change the ETag
+	if meta1.ETag == meta2.ETag {
+		t.Errorf("ETag should change on every write, got %q twice", meta1.ETag)
+	}
+
+	// Must not look like an MD5 (32 hex characters), which clients would try to verify
+	if unquoted := strings.Trim(meta1.ETag, "\""); len(unquoted) == 32 {
+		t.Errorf("ETag should not be 32 characters: %q", meta1.ETag)
+	}
+
+	headMeta, err := storage.HeadObject(testBucket, "etag.txt")
+	if err != nil {
+		t.Fatalf("HeadObject failed: %v", err)
+	}
+	if headMeta.ChecksumCRC32 != meta2.ChecksumCRC32 {
+		t.Errorf("stored ChecksumCRC32 = %q, want %q", headMeta.ChecksumCRC32, meta2.ChecksumCRC32)
 	}
 }
 

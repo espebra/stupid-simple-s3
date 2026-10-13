@@ -14,6 +14,7 @@ A minimal S3-compatible object storage service in Go. Designed for single-server
 - Multi-bucket support via S3 CreateBucket/DeleteBucket API.
 - Presigned URL support for temporary access.
 - Multipart upload support.
+- CRC32 checksums (`x-amz-checksum-crc32`) verified on upload and returned on download.
 - Prometheus metrics endpoint with optional basic auth.
 - Few external dependencies.
 

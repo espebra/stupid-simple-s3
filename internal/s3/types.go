@@ -130,12 +130,16 @@ type Prefix struct {
 
 // ObjectMetadata stores object metadata internally
 type ObjectMetadata struct {
-	Key          string            `json:"key"`
-	Size         int64             `json:"size"`
-	ContentType  string            `json:"content_type"`
-	ETag         string            `json:"etag"`
-	LastModified time.Time         `json:"last_modified"`
-	UserMetadata map[string]string `json:"user_metadata,omitempty"`
+	Key          string    `json:"key"`
+	Size         int64     `json:"size"`
+	ContentType  string    `json:"content_type"`
+	ETag         string    `json:"etag"`
+	LastModified time.Time `json:"last_modified"`
+	// ChecksumCRC32 is the base64-encoded CRC32 of the object data, as sent in
+	// the x-amz-checksum-crc32 header. Empty for objects stored before checksums
+	// were introduced.
+	ChecksumCRC32 string            `json:"checksum_crc32,omitempty"`
+	UserMetadata  map[string]string `json:"user_metadata,omitempty"`
 }
 
 // MultipartUploadMetadata stores multipart upload metadata
@@ -153,4 +157,6 @@ type PartMetadata struct {
 	PartNumber int    `json:"part_number"`
 	ETag       string `json:"etag"`
 	Size       int64  `json:"size"`
+	// ChecksumCRC32 is the base64-encoded CRC32 of the part data
+	ChecksumCRC32 string `json:"checksum_crc32,omitempty"`
 }
