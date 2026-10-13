@@ -1,13 +1,14 @@
 package storage
 
 import (
-	"crypto/md5"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -50,6 +51,28 @@ var ErrPartNotFound = errors.New("part not found")
 
 // ErrInvalidPartOrder is returned when parts are not in ascending order
 var ErrInvalidPartOrder = errors.New("parts must be in ascending order")
+
+// ErrBadDigest is returned when uploaded data does not match the checksum sent by the client
+var ErrBadDigest = errors.New("checksum mismatch")
+
+// EncodeCRC32 returns a CRC32 value in the base64 form used by the
+// x-amz-checksum-crc32 header.
+func EncodeCRC32(sum uint32) string {
+	var b [4]byte
+	binary.BigEndian.PutUint32(b[:], sum)
+	return base64.StdEncoding.EncodeToString(b[:])
+}
+
+// makeETag builds a quoted ETag from the CRC32, size and write time of the
+// data. The write time keeps ETags unique when two versions share a CRC32.
+// The format is deliberately not 32 hex characters, so clients do not mistake
+// it for an MD5 digest. A non-zero parts count adds the S3 multipart "-N" suffix.
+func makeETag(sum uint32, size int64, t time.Time, parts int) string {
+	if parts > 0 {
+		return fmt.Sprintf("\"%08x-%d-%d-%d\"", sum, size, t.UnixNano(), parts)
+	}
+	return fmt.Sprintf("\"%08x-%d-%d\"", sum, size, t.UnixNano())
+}
 
 // ValidateKey checks that an object key is safe and doesn't contain path traversal sequences.
 // Returns an error if the key is invalid.
@@ -318,8 +341,8 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 		return nil, fmt.Errorf("creating temp file: %w", err)
 	}
 
-	// Calculate MD5 while writing
-	hash := md5.New()
+	// Calculate CRC32 while writing
+	hash := crc32.NewIEEE()
 	writer := io.MultiWriter(tmpFile, hash)
 
 	size, err := io.Copy(writer, body)
@@ -341,16 +364,16 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 	}
 
 	// Create metadata
-	etag := fmt.Sprintf("\"%s\"", hex.EncodeToString(hash.Sum(nil)))
 	now := time.Now().UTC()
 
 	objMeta := &s3.ObjectMetadata{
-		Key:          key,
-		Size:         size,
-		ContentType:  contentType,
-		ETag:         etag,
-		LastModified: now,
-		UserMetadata: metadata,
+		Key:           key,
+		Size:          size,
+		ContentType:   contentType,
+		ETag:          makeETag(hash.Sum32(), size, now, 0),
+		LastModified:  now,
+		UserMetadata:  metadata,
+		ChecksumCRC32: EncodeCRC32(hash.Sum32()),
 	}
 
 	// Write metadata atomically using temp file and rename

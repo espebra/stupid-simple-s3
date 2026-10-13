@@ -9,14 +9,20 @@ import (
 	"strings"
 )
 
+// maxTrailerLines limits how many trailer lines are accepted after the final chunk
+const maxTrailerLines = 16
+
 // awsChunkedReader decodes AWS chunked transfer encoding
-// Format: <hex-size>;chunk-signature=<sig>\r\n<data>\r\n...0;chunk-signature=<sig>\r\n\r\n
+// Format: <hex-size>;chunk-signature=<sig>\r\n<data>\r\n...0;chunk-signature=<sig>\r\n[<trailers>]\r\n
+// Trailers (e.g. x-amz-checksum-crc32:<value>\r\n) follow the final chunk when
+// the client sends a trailing checksum.
 type awsChunkedReader struct {
 	reader       *bufio.Reader
 	remaining    int64
 	eof          bool
 	totalRead    int64
 	maxChunkSize int64
+	trailers     map[string]string
 }
 
 // newAWSChunkedReader creates a new AWS chunked reader
@@ -41,8 +47,8 @@ func (r *awsChunkedReader) Read(p []byte) (n int, err error) {
 			}
 
 			if chunkSize == 0 {
-				// Final chunk - read trailing CRLF
-				if _, err := r.reader.ReadString('\n'); err != nil && err != io.EOF {
+				// Final chunk - read trailers up to the terminating empty line
+				if err := r.readTrailers(); err != nil {
 					return n, err
 				}
 				r.eof = true
@@ -114,6 +120,37 @@ func (r *awsChunkedReader) readChunkHeader() (int64, error) {
 	return size, nil
 }
 
+// readTrailers reads the trailer lines after the final chunk until an empty
+// line or end of input.
+func (r *awsChunkedReader) readTrailers() error {
+	for i := 0; i < maxTrailerLines; i++ {
+		line, err := r.reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			return nil
+		}
+		if name, value, ok := strings.Cut(line, ":"); ok {
+			if r.trailers == nil {
+				r.trailers = make(map[string]string)
+			}
+			r.trailers[strings.ToLower(strings.TrimSpace(name))] = strings.TrimSpace(value)
+		}
+		if err == io.EOF {
+			return nil
+		}
+	}
+	return fmt.Errorf("too many trailer lines")
+}
+
+// Trailer returns the value of the named trailer, or "" if it was not sent.
+// It is only populated once the reader has reached the final chunk.
+func (r *awsChunkedReader) Trailer(name string) string {
+	return r.trailers[strings.ToLower(name)]
+}
+
 // TotalRead returns the total bytes of actual data read (excluding headers)
 func (r *awsChunkedReader) TotalRead() int64 {
 	return r.totalRead
@@ -129,13 +166,4 @@ func isAWSChunkedEncoding(contentEncoding, contentSha256 string) bool {
 		return true
 	}
 	return false
-}
-
-// wrapBodyIfChunked wraps the request body if it uses AWS chunked encoding
-// Returns the wrapped reader. maxChunkSize limits the maximum allowed chunk size (0 = unlimited).
-func wrapBodyIfChunked(body io.ReadCloser, contentEncoding, contentSha256 string, maxChunkSize int64) io.Reader {
-	if isAWSChunkedEncoding(contentEncoding, contentSha256) {
-		return newAWSChunkedReader(body, maxChunkSize)
-	}
-	return body
 }

@@ -9,6 +9,7 @@ type ErrorCode string
 
 const (
 	ErrAccessDenied                 ErrorCode = "AccessDenied"
+	ErrBadDigest                    ErrorCode = "BadDigest"
 	ErrBucketAlreadyOwnedByYou      ErrorCode = "BucketAlreadyOwnedByYou"
 	ErrBucketNotEmpty               ErrorCode = "BucketNotEmpty"
 	ErrInternalError                ErrorCode = "InternalError"
@@ -36,6 +37,7 @@ const (
 
 var errorStatusCodes = map[ErrorCode]int{
 	ErrAccessDenied:                 http.StatusForbidden,
+	ErrBadDigest:                    http.StatusBadRequest,
 	ErrBucketAlreadyOwnedByYou:      http.StatusConflict,
 	ErrBucketNotEmpty:               http.StatusConflict,
 	ErrInternalError:                http.StatusInternalServerError,
@@ -63,6 +65,7 @@ var errorStatusCodes = map[ErrorCode]int{
 
 var errorMessages = map[ErrorCode]string{
 	ErrAccessDenied:                 "Access Denied",
+	ErrBadDigest:                    "The CRC32 you specified did not match the calculated checksum.",
 	ErrBucketAlreadyOwnedByYou:      "Your previous request to create the named bucket succeeded and you already own it.",
 	ErrBucketNotEmpty:               "The bucket you tried to delete is not empty",
 	ErrInternalError:                "We encountered an internal error. Please try again.",

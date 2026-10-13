@@ -1,11 +1,10 @@
 package storage
 
 import (
-	"crypto/md5"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -103,8 +102,8 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 		return nil, fmt.Errorf("creating part file: %w", err)
 	}
 
-	// Calculate MD5 while writing
-	hash := md5.New()
+	// Calculate CRC32 while writing
+	hash := crc32.NewIEEE()
 	writer := io.MultiWriter(tmpFile, hash)
 
 	size, err := io.Copy(writer, body)
@@ -124,13 +123,12 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 		return nil, fmt.Errorf("renaming part file: %w", err)
 	}
 
-	etag := fmt.Sprintf("\"%s\"", hex.EncodeToString(hash.Sum(nil)))
-
 	// Save part metadata
 	partMeta := &s3.PartMetadata{
-		PartNumber: partNumber,
-		ETag:       etag,
-		Size:       size,
+		PartNumber:    partNumber,
+		ETag:          makeETag(hash.Sum32(), size, time.Now(), 0),
+		Size:          size,
+		ChecksumCRC32: EncodeCRC32(hash.Sum32()),
 	}
 
 	partMetaPath := filepath.Join(uploadPath, partFilename+".meta")
@@ -174,7 +172,6 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	}
 
 	// Verify all parts exist and ETags match
-	var partHashes [][]byte
 	var totalSize int64
 
 	for _, part := range parts {
@@ -211,12 +208,6 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 			return nil, fmt.Errorf("part %d ETag mismatch: expected %s, got %s", part.PartNumber, expectedETag, actualETag)
 		}
 
-		// Decode the hex MD5 for multipart ETag calculation
-		hashBytes, err := hex.DecodeString(actualETag)
-		if err != nil {
-			return nil, fmt.Errorf("invalid part %d ETag format: %w", part.PartNumber, err)
-		}
-		partHashes = append(partHashes, hashBytes)
 		totalSize += partMeta.Size
 	}
 
@@ -232,11 +223,13 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	dataPath := filepath.Join(objPath, "data")
 	tmpPath := dataPath + ".tmp." + uploadID
 
-	// Concatenate all parts
+	// Concatenate all parts, calculating the full-object CRC32 while copying
 	outFile, err := os.Create(tmpPath)
 	if err != nil {
 		return nil, fmt.Errorf("creating output file: %w", err)
 	}
+	hash := crc32.NewIEEE()
+	writer := io.MultiWriter(outFile, hash)
 
 	for _, part := range parts {
 		partFilename := fmt.Sprintf("part.%05d", part.PartNumber)
@@ -249,7 +242,7 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 			return nil, fmt.Errorf("opening part %d: %w", part.PartNumber, err)
 		}
 
-		_, err = io.Copy(outFile, partFile)
+		_, err = io.Copy(writer, partFile)
 		_ = partFile.Close()
 		if err != nil {
 			_ = outFile.Close()
@@ -268,22 +261,16 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 		return nil, fmt.Errorf("renaming output file: %w", err)
 	}
 
-	// Calculate multipart ETag: MD5 of concatenated part MD5s, with -N suffix
-	combinedHash := md5.New()
-	for _, h := range partHashes {
-		combinedHash.Write(h)
-	}
-	etag := fmt.Sprintf("\"%s-%d\"", hex.EncodeToString(combinedHash.Sum(nil)), len(parts))
-
 	// Create object metadata
 	now := time.Now().UTC()
 	objMeta := &s3.ObjectMetadata{
-		Key:          uploadMeta.Key,
-		Size:         totalSize,
-		ContentType:  uploadMeta.ContentType,
-		ETag:         etag,
-		LastModified: now,
-		UserMetadata: uploadMeta.UserMetadata,
+		Key:           uploadMeta.Key,
+		Size:          totalSize,
+		ContentType:   uploadMeta.ContentType,
+		ETag:          makeETag(hash.Sum32(), totalSize, now, len(parts)),
+		LastModified:  now,
+		UserMetadata:  uploadMeta.UserMetadata,
+		ChecksumCRC32: EncodeCRC32(hash.Sum32()),
 	}
 
 	// Write metadata atomically using temp file and rename

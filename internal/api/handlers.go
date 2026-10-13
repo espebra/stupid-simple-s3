@@ -255,7 +255,13 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Handle AWS chunked encoding (used by Minio SDK and some AWS SDK configurations)
-	body := wrapBodyIfChunked(r.Body, r.Header.Get("Content-Encoding"), r.Header.Get("X-Amz-Content-Sha256"), h.cfg.Limits.MaxChunkSize)
+	// and verify the client's CRC32 checksum, if sent
+	body, err := uploadBody(r, h.cfg.Limits.MaxChunkSize)
+	if err != nil {
+		drainRequestBody(r)
+		s3.WriteErrorResponse(w, s3.ErrInvalidRequest)
+		return
+	}
 
 	// Enforce maximum object size limit
 	if h.cfg.Limits.MaxObjectSize > 0 {
@@ -269,6 +275,10 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 			s3.WriteErrorResponse(w, s3.ErrEntityTooLarge)
 			return
 		}
+		if errors.Is(err, storage.ErrBadDigest) {
+			s3.WriteErrorResponse(w, s3.ErrBadDigest)
+			return
+		}
 		if errors.Is(err, storage.ErrInvalidKey) {
 			s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
 			return
@@ -279,6 +289,7 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("ETag", meta.ETag)
+	setChecksumHeaders(w, meta.ChecksumCRC32)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -381,6 +392,7 @@ func (h *Handlers) GetObject(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
 	w.Header().Set("ETag", meta.ETag)
 	w.Header().Set("Last-Modified", meta.LastModified.UTC().Format(http.TimeFormat))
+	setChecksumHeaders(w, meta.ChecksumCRC32)
 	w.Header().Set("Accept-Ranges", "bytes")
 
 	// Set user metadata headers
@@ -606,6 +618,7 @@ func (h *Handlers) HeadObject(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
 	w.Header().Set("ETag", meta.ETag)
 	w.Header().Set("Last-Modified", meta.LastModified.UTC().Format(http.TimeFormat))
+	setChecksumHeaders(w, meta.ChecksumCRC32)
 
 	// Set user metadata headers
 	for k, v := range meta.UserMetadata {
@@ -735,8 +748,13 @@ func (h *Handlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 	metrics.UploadsActive.Inc()
 	defer metrics.UploadsActive.Dec()
 
-	// Handle AWS chunked encoding
-	body := wrapBodyIfChunked(r.Body, r.Header.Get("Content-Encoding"), r.Header.Get("X-Amz-Content-Sha256"), h.cfg.Limits.MaxChunkSize)
+	// Handle AWS chunked encoding and verify the client's CRC32 checksum, if sent
+	body, err := uploadBody(r, h.cfg.Limits.MaxChunkSize)
+	if err != nil {
+		drainRequestBody(r)
+		s3.WriteErrorResponse(w, s3.ErrInvalidRequest)
+		return
+	}
 
 	// Enforce maximum part size limit
 	if h.cfg.Limits.MaxPartSize > 0 {
@@ -750,6 +768,10 @@ func (h *Handlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 			s3.WriteErrorResponse(w, s3.ErrEntityTooLarge)
 			return
 		}
+		if errors.Is(err, storage.ErrBadDigest) {
+			s3.WriteErrorResponse(w, s3.ErrBadDigest)
+			return
+		}
 		if errors.Is(err, storage.ErrUploadNotFound) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchUpload)
 			return
@@ -760,6 +782,7 @@ func (h *Handlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("ETag", partMeta.ETag)
+	w.Header().Set(checksumCRC32Header, partMeta.ChecksumCRC32)
 	w.WriteHeader(http.StatusOK)
 }
 
