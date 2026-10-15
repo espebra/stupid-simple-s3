@@ -15,7 +15,7 @@ A minimal S3-compatible object storage service in Go. Designed for single-server
 - Presigned URL support for temporary access.
 - Multipart upload support.
 - CRC32 checksums (`x-amz-checksum-crc32`) verified on upload and returned on download.
-- Prometheus metrics endpoint with optional basic auth.
+- Prometheus metrics endpoint on a separate listener with optional basic auth.
 - Few external dependencies.
 
 Note that Stupid Simple S3 is HTTP only. TLS support needs to be provided by a separate TLS proxy.
@@ -96,8 +96,9 @@ The service is configured using environment variables:
 | `STUPID_RO_SECRET_KEY` | Read-only user secret key | (optional) |
 | `STUPID_RW_ACCESS_KEY` | Read-write user access key | (optional) |
 | `STUPID_RW_SECRET_KEY` | Read-write user secret key | (optional) |
-| `STUPID_METRICS_USERNAME` | Username for /metrics basic auth | (optional) |
-| `STUPID_METRICS_PASSWORD` | Password for /metrics basic auth | (optional) |
+| `STUPID_METRICS_ADDRESS` | Address for the metrics listener serving `/metrics` (e.g. `:5554`). Empty disables `/metrics`. | (disabled) |
+| `STUPID_METRICS_USERNAME` | Username for /metrics (and pprof) basic auth | (optional) |
+| `STUPID_METRICS_PASSWORD` | Password for /metrics (and pprof) basic auth | (optional) |
 | `STUPID_MAX_OBJECT_SIZE` | Maximum object size in bytes | `5368709120` (5GB) |
 | `STUPID_MAX_PART_SIZE` | Maximum multipart part size in bytes | `5368709120` (5GB) |
 | `STUPID_MAX_CHUNK_SIZE` | Maximum AWS chunked encoding chunk size in bytes | `5368709120` (5GB) |
@@ -107,7 +108,8 @@ The service is configured using environment variables:
 | `STUPID_SHUTDOWN_TIMEOUT` | Maximum duration for graceful shutdown | `30s` |
 | `STUPID_LOG_FORMAT` | Log output format (`text` or `json`) | `text` |
 | `STUPID_LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | `info` |
-| `STUPID_PPROF_ADDRESS` | Address for the pprof debug listener (e.g. `127.0.0.1:6060` or `:6060`). If only a port is given, the host defaults to `127.0.0.1`. Empty disables pprof. | (disabled) |
+| `STUPID_PPROF_ENABLED` | Serve pprof endpoints on the metrics listener (`true`/`false`). Requires `STUPID_METRICS_ADDRESS`. | `false` |
+| `STUPID_PPROF_ADDRESS` | Deprecated: address for a dedicated pprof listener (e.g. `127.0.0.1:6060`). Use `STUPID_PPROF_ENABLED` instead. | (disabled) |
 
 At least one credential pair (read-only or read-write) must be provided.
 
@@ -217,6 +219,14 @@ These endpoints do not require authentication.
 |----------|-------------|
 | `/metrics` | Prometheus metrics |
 
+`/metrics` is served only on a separate metrics listener, which keeps it off the port that clients (and Varnish) reach. It is disabled unless `STUPID_METRICS_ADDRESS` is set:
+
+```bash
+export STUPID_METRICS_ADDRESS=:5554
+```
+
+On the S3 listener, `/metrics` is an ordinary S3 path (the bucket `metrics`). The health check endpoints stay on the S3 listener.
+
 By default, no authentication is required. To enable basic authentication, set both `STUPID_METRICS_USERNAME` and `STUPID_METRICS_PASSWORD` environment variables.
 
 Available metrics:
@@ -243,24 +253,50 @@ Example Prometheus scrape config:
 scrape_configs:
   - job_name: 'stupid-simple-s3'
     static_configs:
-      - targets: ['localhost:5553']
+      - targets: ['localhost:5554'] # the STUPID_METRICS_ADDRESS port
     # If basic auth is enabled:
     # basic_auth:
     #   username: 'metrics_user'
     #   password: 'metrics_password'
 ```
 
-## Profiling with pprof
+Example Kubernetes container port and `PodMonitor` for the metrics listener:
 
-The standard Go `net/http/pprof` endpoints can be exposed on a separate listener that is bound to a private address by default. They are never registered on the main S3 listener.
-
-Set `STUPID_PPROF_ADDRESS` to enable it:
-
-```bash
-export STUPID_PPROF_ADDRESS=127.0.0.1:6060
+```yaml
+# Container spec
+env:
+  - name: STUPID_METRICS_ADDRESS
+    value: ":5554"
+ports:
+  - name: s3
+    containerPort: 5553
+  - name: metrics
+    containerPort: 5554
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: stupid-simple-s3
+spec:
+  selector:
+    matchLabels:
+      app: stupid-simple-s3
+  podMetricsEndpoints:
+    - port: metrics
 ```
 
-If only a port is given (e.g. `:6060`), the host defaults to `127.0.0.1` so the listener is not exposed on a public interface. Setting an explicit wildcard host (`0.0.0.0:6060`) is allowed but will log a warning at startup.
+## Profiling with pprof
+
+The standard Go `net/http/pprof` endpoints can be served on the metrics listener. They are disabled by default and never registered on the S3 listener. When metrics basic auth is configured, it also applies to the pprof endpoints.
+
+Enable them together with the metrics listener:
+
+```bash
+export STUPID_METRICS_ADDRESS=:5554
+export STUPID_PPROF_ENABLED=true
+```
+
+The older `STUPID_PPROF_ADDRESS` variable still starts a dedicated pprof listener on the given address, but it is deprecated and logs a warning at startup. The address is used as is, so `:6060` listens on all interfaces; use `127.0.0.1:6060` to keep it local. It cannot be combined with `STUPID_PPROF_ENABLED`.
 
 Available endpoints (under `/debug/pprof/`):
 
@@ -273,11 +309,11 @@ Available endpoints (under `/debug/pprof/`):
 | `/debug/pprof/trace` | Execution trace |
 | `/debug/pprof/cmdline`, `/debug/pprof/symbol` | Process metadata |
 
-Example usage from the same host (or via SSH port-forward):
+Example usage from the same host (or via SSH port-forward or `kubectl port-forward`):
 
 ```bash
-go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=30
-go tool pprof http://127.0.0.1:6060/debug/pprof/heap
+go tool pprof http://127.0.0.1:5554/debug/pprof/profile?seconds=30
+go tool pprof http://127.0.0.1:5554/debug/pprof/heap
 ```
 
 The pprof endpoints expose internal program state and must not be reachable from untrusted networks.

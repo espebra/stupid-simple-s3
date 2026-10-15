@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -93,10 +92,26 @@ func main() {
 	// Create server
 	server := api.NewServer(cfg, store)
 
-	// Start pprof listener if configured. Bound to a separate address from the
-	// S3 listener so it can be kept off public interfaces.
+	// Start the metrics listener if configured. It serves /metrics and,
+	// optionally, pprof. Neither is served on the S3 listener.
+	var metricsServer *http.Server
+	if cfg.Server.MetricsAddress != "" {
+		metricsServer = api.NewMetricsServer(cfg)
+		go func() {
+			slog.Info("starting metrics listener", "address", cfg.Server.MetricsAddress, "pprof_enabled", cfg.Pprof.Enabled)
+			if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				slog.Error("metrics listener error", "error", err)
+				os.Exit(1)
+			}
+		}()
+	} else {
+		slog.Info("metrics listener disabled, set STUPID_METRICS_ADDRESS to serve /metrics")
+	}
+
+	// Start the deprecated dedicated pprof listener if configured.
 	var pprofServer *http.Server
-	if cfg.Pprof.Enabled() {
+	if cfg.Pprof.Address != "" {
+		slog.Warn("STUPID_PPROF_ADDRESS is deprecated, use STUPID_METRICS_ADDRESS with STUPID_PPROF_ENABLED=true")
 		pprofServer = startPprofServer(cfg.Pprof.Address)
 	}
 
@@ -127,6 +142,12 @@ func main() {
 		}
 	}
 
+	if metricsServer != nil {
+		if err := metricsServer.Shutdown(ctx); err != nil {
+			slog.Error("metrics shutdown error", "error", err)
+		}
+	}
+
 	if err := server.Shutdown(ctx); err != nil {
 		slog.Error("shutdown error", "error", err)
 		os.Exit(1)
@@ -140,11 +161,7 @@ func main() {
 // a private mux so they are never reachable on the main S3 listener.
 func startPprofServer(address string) *http.Server {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	api.RegisterPprof(mux)
 
 	srv := &http.Server{
 		Addr:              address,

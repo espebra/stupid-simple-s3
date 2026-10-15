@@ -54,10 +54,18 @@ STUPID_RW_ACCESS_KEY=your-access-key-here
 STUPID_RW_SECRET_KEY=your-secret-key-here
 
 # =============================================================================
-# Metrics endpoint authentication (optional)
+# Metrics endpoint (optional)
 # =============================================================================
 
-# If both are set, /metrics endpoint requires basic auth
+# Address for the metrics listener serving /metrics (default: unset, /metrics disabled)
+# /metrics is never served on the S3 port
+#STUPID_METRICS_ADDRESS=:5554
+
+# Serve pprof endpoints on the metrics listener (default: false)
+# Requires STUPID_METRICS_ADDRESS
+#STUPID_PPROF_ENABLED=false
+
+# If both are set, /metrics (and pprof) endpoints require basic auth
 #STUPID_METRICS_USERNAME=
 #STUPID_METRICS_PASSWORD=
 
