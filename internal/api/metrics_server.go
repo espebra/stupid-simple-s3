@@ -17,7 +17,7 @@ func NewMetricsServer(cfg *config.Config) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	if cfg.Pprof.Enabled {
-		RegisterPprof(mux)
+		registerPprof(mux)
 	}
 
 	metricsAuth := MetricsBasicAuth(cfg.MetricsAuth.Username, cfg.MetricsAuth.Password)
@@ -32,9 +32,9 @@ func NewMetricsServer(cfg *config.Config) *http.Server {
 	}
 }
 
-// RegisterPprof registers the standard net/http/pprof endpoints under
+// registerPprof registers the standard net/http/pprof endpoints under
 // /debug/pprof/ on mux.
-func RegisterPprof(mux *http.ServeMux) {
+func registerPprof(mux *http.ServeMux) {
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)

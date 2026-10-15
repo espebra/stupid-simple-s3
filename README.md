@@ -109,7 +109,6 @@ The service is configured using environment variables:
 | `STUPID_LOG_FORMAT` | Log output format (`text` or `json`) | `text` |
 | `STUPID_LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | `info` |
 | `STUPID_PPROF_ENABLED` | Serve pprof endpoints on the metrics listener (`true`/`false`). Requires `STUPID_METRICS_ADDRESS`. | `false` |
-| `STUPID_PPROF_ADDRESS` | Deprecated: address for a dedicated pprof listener (e.g. `127.0.0.1:6060`). Use `STUPID_PPROF_ENABLED` instead. | (disabled) |
 
 At least one credential pair (read-only or read-write) must be provided.
 
@@ -295,8 +294,6 @@ Enable them together with the metrics listener:
 export STUPID_METRICS_ADDRESS=:5554
 export STUPID_PPROF_ENABLED=true
 ```
-
-The older `STUPID_PPROF_ADDRESS` variable still starts a dedicated pprof listener on the given address, but it is deprecated and logs a warning at startup. The address is used as is, so `:6060` listens on all interfaces; use `127.0.0.1:6060` to keep it local. It cannot be combined with `STUPID_PPROF_ENABLED`.
 
 Available endpoints (under `/debug/pprof/`):
 
