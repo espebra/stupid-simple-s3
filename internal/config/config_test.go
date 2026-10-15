@@ -389,3 +389,82 @@ func TestConfigLog(t *testing.T) {
 	// LogConfiguration() should not panic - just verify it runs
 	cfg.LogConfiguration()
 }
+
+func TestLoadMetricsAndPprof(t *testing.T) {
+	tests := []struct {
+		name          string
+		env           map[string]string
+		wantErr       bool
+		wantMetrics   string
+		wantPprof     bool
+		wantPprofAddr string
+	}{
+		{
+			name: "defaults",
+		},
+		{
+			name:        "separate metrics listener",
+			env:         map[string]string{"STUPID_METRICS_ADDRESS": ":5554"},
+			wantMetrics: ":5554",
+		},
+		{
+			name:        "pprof on metrics listener",
+			env:         map[string]string{"STUPID_METRICS_ADDRESS": ":5554", "STUPID_PPROF_ENABLED": "true"},
+			wantMetrics: ":5554",
+			wantPprof:   true,
+		},
+		{
+			name:    "pprof enabled without metrics listener",
+			env:     map[string]string{"STUPID_PPROF_ENABLED": "true"},
+			wantErr: true,
+		},
+		{
+			name:    "pprof enabled together with deprecated address",
+			env:     map[string]string{"STUPID_METRICS_ADDRESS": ":5554", "STUPID_PPROF_ENABLED": "true", "STUPID_PPROF_ADDRESS": "127.0.0.1:6060"},
+			wantErr: true,
+		},
+		{
+			name:          "deprecated pprof address",
+			env:           map[string]string{"STUPID_PPROF_ADDRESS": "127.0.0.1:6060"},
+			wantPprofAddr: "127.0.0.1:6060",
+		},
+		{
+			name:    "metrics address equal to S3 address",
+			env:     map[string]string{"STUPID_METRICS_ADDRESS": ":5553"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, k := range []string{"STUPID_HOST", "STUPID_PORT", "STUPID_METRICS_ADDRESS", "STUPID_PPROF_ENABLED", "STUPID_PPROF_ADDRESS"} {
+				t.Setenv(k, "")
+			}
+			t.Setenv("STUPID_RW_ACCESS_KEY", "AKIA")
+			t.Setenv("STUPID_RW_SECRET_KEY", "secret")
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+
+			cfg, err := Load()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load failed: %v", err)
+			}
+			if cfg.Server.MetricsAddress != tt.wantMetrics {
+				t.Errorf("Server.MetricsAddress = %q, want %q", cfg.Server.MetricsAddress, tt.wantMetrics)
+			}
+			if cfg.Pprof.Enabled != tt.wantPprof {
+				t.Errorf("Pprof.Enabled = %v, want %v", cfg.Pprof.Enabled, tt.wantPprof)
+			}
+			if cfg.Pprof.Address != tt.wantPprofAddr {
+				t.Errorf("Pprof.Address = %q, want %q", cfg.Pprof.Address, tt.wantPprofAddr)
+			}
+		})
+	}
+}

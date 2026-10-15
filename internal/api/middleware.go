@@ -193,6 +193,12 @@ func MetricsMiddleware(next http.Handler) http.Handler {
 
 // AccessLogMiddleware logs HTTP requests using structured logging
 func AccessLogMiddleware(trustedProxies []string) func(http.Handler) http.Handler {
+	return accessLogMiddleware(trustedProxies, isHealthEndpoint)
+}
+
+// accessLogMiddleware logs requests, logging paths for which isInternal
+// returns true at debug level to reduce noise.
+func accessLogMiddleware(trustedProxies []string, isInternal func(path string) bool) func(http.Handler) http.Handler {
 	proxyChecker := newTrustedProxyChecker(trustedProxies)
 
 	return func(next http.Handler) http.Handler {
@@ -209,7 +215,7 @@ func AccessLogMiddleware(trustedProxies []string) func(http.Handler) http.Handle
 			requestID := GetRequestID(r)
 
 			// Log health and metrics endpoints at debug level to reduce noise
-			if isInternalEndpoint(r.URL.Path) {
+			if isInternal(r.URL.Path) {
 				slog.Debug("request",
 					"client_ip", clientIP,
 					"method", r.Method,
@@ -248,9 +254,14 @@ func AccessLogMiddleware(trustedProxies []string) func(http.Handler) http.Handle
 	}
 }
 
-// isInternalEndpoint returns true for health check and metrics endpoints
-func isInternalEndpoint(path string) bool {
-	return path == "/healthz" || path == "/readyz" || path == "/metrics"
+// isHealthEndpoint returns true for health check endpoints
+func isHealthEndpoint(path string) bool {
+	return path == "/healthz" || path == "/readyz"
+}
+
+// isMetricsEndpoint returns true for the metrics endpoint
+func isMetricsEndpoint(path string) bool {
+	return path == "/metrics"
 }
 
 // getClientIP extracts the client IP from the request

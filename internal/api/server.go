@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"github.com/espen/stupid-simple-s3/internal/config"
 	"github.com/espen/stupid-simple-s3/internal/storage"
 )
@@ -76,18 +74,13 @@ func (s *Server) setupRoutes() {
 	s.mux.Handle("POST /{bucket}/{key...}", MetricsMiddleware(authMiddleware(RequireWritePrivilege(http.HandlerFunc(s.handlers.PostObject)))))
 }
 
-// Handler returns the HTTP handler that includes metrics endpoint
+// Handler returns the HTTP handler for the S3 listener, including health checks
 func (s *Server) Handler() http.Handler {
-	// Wrap mux to handle /metrics before the S3 routes
-	// This avoids Go 1.24+ routing conflicts between /metrics and /{bucket}
-	metricsAuth := MetricsBasicAuth(s.cfg.MetricsAuth.Username, s.cfg.MetricsAuth.Password)
-	metricsHandler := metricsAuth(promhttp.Handler())
-
+	// Wrap mux to handle health checks before the S3 routes.
+	// This avoids Go 1.24+ routing conflicts with /{bucket}.
+	// /metrics is served only on the separate metrics listener.
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/metrics":
-			metricsHandler.ServeHTTP(w, r)
-			return
 		case "/healthz":
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("ok"))

@@ -80,6 +80,7 @@ func (c *Cleanup) GetMaxAge() time.Duration {
 
 type Server struct {
 	Address         string
+	MetricsAddress  string        // Address for the metrics listener; empty disables /metrics
 	TrustedProxies  []string      // List of trusted proxy IPs/CIDRs that can set X-Forwarded-For
 	ReadTimeout     time.Duration // Maximum duration for reading entire request
 	WriteTimeout    time.Duration // Maximum duration for writing response
@@ -111,15 +112,14 @@ type LogConfig struct {
 	Level  string // "debug", "info", "warn", "error"
 }
 
-// Pprof holds configuration for the pprof debug listener.
-// When Address is empty, the pprof listener is disabled.
+// Pprof holds configuration for the pprof debug endpoints.
 type Pprof struct {
+	// Enabled serves the pprof endpoints on the metrics listener.
+	Enabled bool
+	// Address starts a dedicated pprof listener.
+	//
+	// Deprecated: use Enabled together with Server.MetricsAddress.
 	Address string
-}
-
-// Enabled returns true if the pprof listener should be started.
-func (p *Pprof) Enabled() bool {
-	return p.Address != ""
 }
 
 type Config struct {
@@ -138,6 +138,9 @@ type Config struct {
 // Environment variables:
 //   - STUPID_HOST: Listen host (default: all interfaces)
 //   - STUPID_PORT: Listen port (default: "5553")
+//   - STUPID_METRICS_ADDRESS: Address for the metrics listener serving
+//     /metrics (e.g. ":5554"). /metrics is never served on the S3 listener.
+//     Empty (default) disables /metrics.
 //   - STUPID_BUCKET_NAME: Bucket name to auto-create at startup (optional)
 //   - STUPID_STORAGE_PATH: Storage path (default: "/var/lib/stupid-simple-s3/data")
 //   - STUPID_MULTIPART_PATH: Multipart storage path (default: "/var/lib/stupid-simple-s3/tmp")
@@ -159,10 +162,11 @@ type Config struct {
 //   - STUPID_SHUTDOWN_TIMEOUT: Maximum duration for graceful shutdown (default: "30s")
 //   - STUPID_LOG_FORMAT: Log output format, "json" or "text" (default: "text")
 //   - STUPID_LOG_LEVEL: Log level, "debug", "info", "warn", "error" (default: "info")
-//   - STUPID_PPROF_ADDRESS: Address for the pprof debug listener (e.g.
-//     "127.0.0.1:6060"). Use a loopback host to keep profiling data off public
-//     interfaces; ":6060" binds to all interfaces. Empty (default) disables the
-//     listener.
+//   - STUPID_PPROF_ENABLED: Serve pprof endpoints on the metrics listener,
+//     "true" or "false" (default: "false"). Requires STUPID_METRICS_ADDRESS.
+//   - STUPID_PPROF_ADDRESS: Deprecated. Address for a dedicated pprof listener
+//     (e.g. "127.0.0.1:6060"). ":6060" binds to all interfaces. Empty
+//     (default) disables the listener.
 func Load() (*Config, error) {
 	host := os.Getenv("STUPID_HOST")
 	port := os.Getenv("STUPID_PORT")
@@ -203,6 +207,7 @@ func Load() (*Config, error) {
 		},
 		Server: Server{
 			Address:         address,
+			MetricsAddress:  os.Getenv("STUPID_METRICS_ADDRESS"),
 			TrustedProxies:  trustedProxies,
 			ReadTimeout:     parseEnvDuration("STUPID_READ_TIMEOUT", DefaultReadTimeout),
 			WriteTimeout:    parseEnvDuration("STUPID_WRITE_TIMEOUT", DefaultWriteTimeout),
@@ -227,6 +232,7 @@ func Load() (*Config, error) {
 			Level:  getEnvOrDefault("STUPID_LOG_LEVEL", "info"),
 		},
 		Pprof: Pprof{
+			Enabled: os.Getenv("STUPID_PPROF_ENABLED") == "true",
 			Address: os.Getenv("STUPID_PPROF_ADDRESS"),
 		},
 	}
@@ -296,6 +302,15 @@ func (c *Config) validate() error {
 	if c.Server.Address == "" {
 		return fmt.Errorf("server.address is required")
 	}
+	if c.Server.MetricsAddress != "" && c.Server.MetricsAddress == c.Server.Address {
+		return fmt.Errorf("STUPID_METRICS_ADDRESS must differ from the S3 listen address")
+	}
+	if c.Pprof.Enabled && c.Server.MetricsAddress == "" {
+		return fmt.Errorf("STUPID_PPROF_ENABLED requires STUPID_METRICS_ADDRESS")
+	}
+	if c.Pprof.Enabled && c.Pprof.Address != "" {
+		return fmt.Errorf("STUPID_PPROF_ENABLED and STUPID_PPROF_ADDRESS cannot both be set")
+	}
 	if len(c.Credentials) == 0 {
 		return fmt.Errorf("at least one credential is required")
 	}
@@ -332,6 +347,7 @@ func (c *Credential) CanWrite() bool {
 func (c *Config) LogConfiguration() {
 	slog.Info("configuration loaded",
 		"server_address", c.Server.Address,
+		"metrics_address", c.Server.MetricsAddress,
 		"bucket_name", c.Bucket.Name,
 		"storage_path", c.Storage.Path,
 		"multipart_path", c.Storage.MultipartPath,
@@ -349,7 +365,7 @@ func (c *Config) LogConfiguration() {
 		"credentials_count", len(c.Credentials),
 		"log_format", c.Log.Format,
 		"log_level", c.Log.Level,
-		"pprof_enabled", c.Pprof.Enabled(),
+		"pprof_enabled", c.Pprof.Enabled,
 		"pprof_address", c.Pprof.Address,
 	)
 	for i, cred := range c.Credentials {
