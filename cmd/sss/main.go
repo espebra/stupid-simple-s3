@@ -108,13 +108,6 @@ func main() {
 		slog.Info("metrics listener disabled, set STUPID_METRICS_ADDRESS to serve /metrics")
 	}
 
-	// Start the deprecated dedicated pprof listener if configured.
-	var pprofServer *http.Server
-	if cfg.Pprof.Address != "" {
-		slog.Warn("STUPID_PPROF_ADDRESS is deprecated, use STUPID_METRICS_ADDRESS with STUPID_PPROF_ENABLED=true")
-		pprofServer = startPprofServer(cfg.Pprof.Address)
-	}
-
 	// Start server in goroutine
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -136,12 +129,6 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
 
-	if pprofServer != nil {
-		if err := pprofServer.Shutdown(ctx); err != nil {
-			slog.Error("pprof shutdown error", "error", err)
-		}
-	}
-
 	if metricsServer != nil {
 		if err := metricsServer.Shutdown(ctx); err != nil {
 			slog.Error("metrics shutdown error", "error", err)
@@ -154,29 +141,6 @@ func main() {
 	}
 
 	slog.Info("server stopped")
-}
-
-// startPprofServer starts a separate HTTP listener that exposes the standard
-// net/http/pprof endpoints under /debug/pprof/. The handlers are registered on
-// a private mux so they are never reachable on the main S3 listener.
-func startPprofServer(address string) *http.Server {
-	mux := http.NewServeMux()
-	api.RegisterPprof(mux)
-
-	srv := &http.Server{
-		Addr:              address,
-		Handler:           mux,
-		ReadHeaderTimeout: api.ReadHeaderTimeout,
-	}
-
-	go func() {
-		slog.Info("starting pprof listener", "address", address)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("pprof listener error", "error", err)
-		}
-	}()
-
-	return srv
 }
 
 // configureLogger sets up the default slog logger

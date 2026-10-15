@@ -116,10 +116,6 @@ type LogConfig struct {
 type Pprof struct {
 	// Enabled serves the pprof endpoints on the metrics listener.
 	Enabled bool
-	// Address starts a dedicated pprof listener.
-	//
-	// Deprecated: use Enabled together with Server.MetricsAddress.
-	Address string
 }
 
 type Config struct {
@@ -164,9 +160,6 @@ type Config struct {
 //   - STUPID_LOG_LEVEL: Log level, "debug", "info", "warn", "error" (default: "info")
 //   - STUPID_PPROF_ENABLED: Serve pprof endpoints on the metrics listener,
 //     "true" or "false" (default: "false"). Requires STUPID_METRICS_ADDRESS.
-//   - STUPID_PPROF_ADDRESS: Deprecated. Address for a dedicated pprof listener
-//     (e.g. "127.0.0.1:6060"). ":6060" binds to all interfaces. Empty
-//     (default) disables the listener.
 func Load() (*Config, error) {
 	host := os.Getenv("STUPID_HOST")
 	port := os.Getenv("STUPID_PORT")
@@ -233,7 +226,6 @@ func Load() (*Config, error) {
 		},
 		Pprof: Pprof{
 			Enabled: os.Getenv("STUPID_PPROF_ENABLED") == "true",
-			Address: os.Getenv("STUPID_PPROF_ADDRESS"),
 		},
 	}
 
@@ -308,9 +300,6 @@ func (c *Config) validate() error {
 	if c.Pprof.Enabled && c.Server.MetricsAddress == "" {
 		return fmt.Errorf("STUPID_PPROF_ENABLED requires STUPID_METRICS_ADDRESS")
 	}
-	if c.Pprof.Enabled && c.Pprof.Address != "" {
-		return fmt.Errorf("STUPID_PPROF_ENABLED and STUPID_PPROF_ADDRESS cannot both be set")
-	}
 	if len(c.Credentials) == 0 {
 		return fmt.Errorf("at least one credential is required")
 	}
@@ -366,7 +355,6 @@ func (c *Config) LogConfiguration() {
 		"log_format", c.Log.Format,
 		"log_level", c.Log.Level,
 		"pprof_enabled", c.Pprof.Enabled,
-		"pprof_address", c.Pprof.Address,
 	)
 	for i, cred := range c.Credentials {
 		slog.Info("credential configured",

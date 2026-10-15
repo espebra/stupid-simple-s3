@@ -92,8 +92,6 @@ SocketBindDeny=any
 SocketBindAllow=tcp:5553
 # Allow binding to TCP port 5554 for the metrics listener (STUPID_METRICS_ADDRESS)
 SocketBindAllow=tcp:5554
-# Allow binding to TCP port 6060 for the deprecated pprof debug listener (STUPID_PPROF_ADDRESS)
-SocketBindAllow=tcp:6060
 
 # Namespace isolation
 
