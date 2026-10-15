@@ -40,6 +40,7 @@ func main() {
 	configureLogger(cfg.Log.Format, cfg.Log.Level)
 
 	slog.Info("starting stupid-simple-s3", "version", version.String())
+	metrics.SetBuildInfo(version.Get())
 
 	cfg.LogConfiguration()
 

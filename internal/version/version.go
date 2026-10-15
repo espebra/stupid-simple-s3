@@ -8,10 +8,12 @@ var Version = "dev"
 // Commit is set at build time via ldflags (git commit hash)
 var Commit = ""
 
-// String returns the version string in the format "stupid-simple-s3 version (commit)"
-func String() string {
+// Get returns the version and the short commit hash of the running binary.
+// The commit carries a "-dirty" suffix when built from a modified working
+// tree, and is empty when unknown.
+func Get() (version, commit string) {
 	// Prefer ldflags-injected commit, fall back to build info
-	commit := Commit
+	commit = Commit
 	if len(commit) > 7 {
 		commit = commit[:7]
 	}
@@ -19,24 +21,19 @@ func String() string {
 	if commit == "" {
 		commit, dirty = getBuildInfo()
 	}
-
-	if Version == "dev" {
-		if commit != "" {
-			if dirty {
-				return "stupid-simple-s3 dev (" + commit + "-dirty)"
-			}
-			return "stupid-simple-s3 dev (" + commit + ")"
-		}
-		return "stupid-simple-s3 dev"
+	if dirty {
+		commit += "-dirty"
 	}
+	return Version, commit
+}
 
+// String returns the version string in the format "stupid-simple-s3 version (commit)"
+func String() string {
+	version, commit := Get()
 	if commit != "" {
-		if dirty {
-			return "stupid-simple-s3 " + Version + " (" + commit + "-dirty)"
-		}
-		return "stupid-simple-s3 " + Version + " (" + commit + ")"
+		return "stupid-simple-s3 " + version + " (" + commit + ")"
 	}
-	return "stupid-simple-s3 " + Version
+	return "stupid-simple-s3 " + version
 }
 
 // getBuildInfo extracts VCS info from Go's embedded build info

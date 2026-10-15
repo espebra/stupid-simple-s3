@@ -6,6 +6,15 @@ import (
 )
 
 var (
+	// BuildInfo identifies the running binary. Always 1; see SetBuildInfo.
+	BuildInfo = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "stupid_simple_s3_build_info",
+			Help: "Build information about the running stupid-simple-s3 binary. Always 1.",
+		},
+		[]string{"version", "commit"},
+	)
+
 	// RequestsInFlight tracks the number of requests currently being processed
 	RequestsInFlight = promauto.NewGauge(
 		prometheus.GaugeOpts{
@@ -128,6 +137,11 @@ const (
 	OpDeleteObjects           = "DeleteObjects"
 	OpUnknown                 = "Unknown"
 )
+
+// SetBuildInfo records the version and commit of the running binary
+func SetBuildInfo(version, commit string) {
+	BuildInfo.WithLabelValues(version, commit).Set(1)
+}
 
 // RegisterMultipartUploadsActive registers a gauge that reports the number
 // of active multipart uploads by querying actual state on each scrape.

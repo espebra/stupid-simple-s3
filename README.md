@@ -232,6 +232,7 @@ Available metrics:
 
 | Metric | Type | Description |
 |--------|------|-------------|
+| `stupid_simple_s3_build_info` | Gauge | Build information (`version`, `commit` labels), always `1` |
 | `stupid_simple_s3_http_requests_in_flight` | Gauge | Number of requests currently being processed |
 | `stupid_simple_s3_http_requests_total` | Counter | Total HTTP requests by method, operation, and status |
 | `stupid_simple_s3_http_request_duration_seconds` | Histogram | Request latency distribution |
