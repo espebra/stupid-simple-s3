@@ -225,7 +225,13 @@ func (fs *FilesystemStorage) keyToPath(bucket, key string) (string, error) {
 	prefix := hex.EncodeToString(keyHash[:2])
 	encodedKey := hex.EncodeToString(keyHash[:])
 
-	result := filepath.Join(fs.basePath, "buckets", bucket, "objects", prefix, encodedKey)
+	// Clean the path below the buckets directory as a rooted path, so that it
+	// stays inside the buckets directory whatever the bucket name contains.
+	// For valid names this changes nothing. Code scanning (CodeQL
+	// go/path-injection) recognizes filepath.Clean("/" + p) as sanitizing p,
+	// which it does not for ValidateBucketName or the containment check below.
+	rel := filepath.Join(bucket, "objects", prefix, encodedKey)
+	result := filepath.Join(fs.basePath, "buckets", filepath.Clean("/"+rel))
 
 	// Defense in depth: verify the resulting path is within basePath
 	// First, resolve the base path (which should always exist)
