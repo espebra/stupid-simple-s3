@@ -14,7 +14,7 @@ const maxTrailerLines = 16
 
 // awsChunkedReader decodes AWS chunked transfer encoding
 // Format: <hex-size>;chunk-signature=<sig>\r\n<data>\r\n...0;chunk-signature=<sig>\r\n[<trailers>]\r\n
-// Trailers (e.g. x-amz-checksum-crc32:<value>\r\n) follow the final chunk when
+// Trailers (e.g. x-amz-checksum-sha256:<value>\r\n) follow the final chunk when
 // the client sends a trailing checksum.
 type awsChunkedReader struct {
 	reader       *bufio.Reader

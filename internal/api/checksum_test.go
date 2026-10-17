@@ -2,9 +2,9 @@ package api
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/xml"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +28,11 @@ func encodeAWSChunkedWithTrailer(data []byte, trailers ...string) string {
 	}
 	buf.WriteString("\r\n")
 	return buf.String()
+}
+
+func sha256Checksum(data string) string {
+	sum := sha256.Sum256([]byte(data))
+	return storage.EncodeChecksum(sum[:])
 }
 
 func newPutRequest(key string, body string) *http.Request {
@@ -99,8 +104,8 @@ func TestPutObjectChecksum(t *testing.T) {
 	defer cleanup()
 
 	content := "Hello, World!"
-	checksum := storage.EncodeCRC32(crc32.ChecksumIEEE([]byte(content)))
-	wrongChecksum := storage.EncodeCRC32(crc32.ChecksumIEEE([]byte("something else")))
+	checksum := sha256Checksum(content)
+	wrongChecksum := sha256Checksum("something else")
 
 	t.Run("no checksum sent", func(t *testing.T) {
 		w := httptest.NewRecorder()
@@ -108,8 +113,8 @@ func TestPutObjectChecksum(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 		}
-		if got := w.Header().Get("x-amz-checksum-crc32"); got != checksum {
-			t.Errorf("x-amz-checksum-crc32 = %q, want %q", got, checksum)
+		if got := w.Header().Get("x-amz-checksum-sha256"); got != checksum {
+			t.Errorf("x-amz-checksum-sha256 = %q, want %q", got, checksum)
 		}
 		if got := w.Header().Get("x-amz-checksum-type"); got != "FULL_OBJECT" {
 			t.Errorf("x-amz-checksum-type = %q, want FULL_OBJECT", got)
@@ -118,7 +123,7 @@ func TestPutObjectChecksum(t *testing.T) {
 
 	t.Run("matching header", func(t *testing.T) {
 		req := newPutRequest("header-ok.txt", content)
-		req.Header.Set("x-amz-checksum-crc32", checksum)
+		req.Header.Set("x-amz-checksum-sha256", checksum)
 		w := httptest.NewRecorder()
 		handlers.PutObject(w, req)
 		if w.Code != http.StatusOK {
@@ -128,7 +133,7 @@ func TestPutObjectChecksum(t *testing.T) {
 
 	t.Run("mismatching header", func(t *testing.T) {
 		req := newPutRequest("header-bad.txt", content)
-		req.Header.Set("x-amz-checksum-crc32", wrongChecksum)
+		req.Header.Set("x-amz-checksum-sha256", wrongChecksum)
 		w := httptest.NewRecorder()
 		handlers.PutObject(w, req)
 		assertErrorCode(t, w, http.StatusBadRequest, s3.ErrBadDigest)
@@ -139,31 +144,41 @@ func TestPutObjectChecksum(t *testing.T) {
 
 	t.Run("malformed header", func(t *testing.T) {
 		req := newPutRequest("header-malformed.txt", content)
-		req.Header.Set("x-amz-checksum-crc32", "not-base64!")
+		req.Header.Set("x-amz-checksum-sha256", "not-base64!")
 		w := httptest.NewRecorder()
 		handlers.PutObject(w, req)
 		assertErrorCode(t, w, http.StatusBadRequest, s3.ErrInvalidRequest)
 	})
 
-	t.Run("matching trailer", func(t *testing.T) {
-		req := newPutRequest("trailer-ok.txt", encodeAWSChunkedWithTrailer([]byte(content), "x-amz-checksum-crc32:"+checksum))
-		req.Header.Set("Content-Encoding", "aws-chunked")
-		req.Header.Set("X-Amz-Content-Sha256", "STREAMING-UNSIGNED-PAYLOAD-TRAILER")
-		req.Header.Set("X-Amz-Trailer", "x-amz-checksum-crc32")
+	t.Run("other algorithms are not verified", func(t *testing.T) {
+		req := newPutRequest("crc32.txt", content)
+		req.Header.Set("x-amz-checksum-crc32", "AAAAAA==")
 		w := httptest.NewRecorder()
 		handlers.PutObject(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 		}
-		if got := w.Header().Get("x-amz-checksum-crc32"); got != checksum {
-			t.Errorf("x-amz-checksum-crc32 = %q, want %q", got, checksum)
+	})
+
+	t.Run("matching trailer", func(t *testing.T) {
+		req := newPutRequest("trailer-ok.txt", encodeAWSChunkedWithTrailer([]byte(content), "x-amz-checksum-sha256:"+checksum))
+		req.Header.Set("Content-Encoding", "aws-chunked")
+		req.Header.Set("X-Amz-Content-Sha256", "STREAMING-UNSIGNED-PAYLOAD-TRAILER")
+		req.Header.Set("X-Amz-Trailer", "x-amz-checksum-sha256")
+		w := httptest.NewRecorder()
+		handlers.PutObject(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+		if got := w.Header().Get("x-amz-checksum-sha256"); got != checksum {
+			t.Errorf("x-amz-checksum-sha256 = %q, want %q", got, checksum)
 		}
 	})
 
 	t.Run("mismatching trailer", func(t *testing.T) {
-		req := newPutRequest("trailer-bad.txt", encodeAWSChunkedWithTrailer([]byte(content), "x-amz-checksum-crc32:"+wrongChecksum))
+		req := newPutRequest("trailer-bad.txt", encodeAWSChunkedWithTrailer([]byte(content), "x-amz-checksum-sha256:"+wrongChecksum))
 		req.Header.Set("Content-Encoding", "aws-chunked")
-		req.Header.Set("X-Amz-Trailer", "x-amz-checksum-crc32")
+		req.Header.Set("X-Amz-Trailer", "x-amz-checksum-sha256")
 		w := httptest.NewRecorder()
 		handlers.PutObject(w, req)
 		assertErrorCode(t, w, http.StatusBadRequest, s3.ErrBadDigest)
@@ -175,7 +190,7 @@ func TestPutObjectChecksum(t *testing.T) {
 	t.Run("declared trailer missing", func(t *testing.T) {
 		req := newPutRequest("trailer-missing.txt", encodeAWSChunkedWithTrailer([]byte(content)))
 		req.Header.Set("Content-Encoding", "aws-chunked")
-		req.Header.Set("X-Amz-Trailer", "x-amz-checksum-crc32")
+		req.Header.Set("X-Amz-Trailer", "x-amz-checksum-sha256")
 		w := httptest.NewRecorder()
 		handlers.PutObject(w, req)
 		assertErrorCode(t, w, http.StatusBadRequest, s3.ErrBadDigest)
@@ -188,7 +203,7 @@ func TestGetObjectChecksumHeaders(t *testing.T) {
 
 	key := "checksum.txt"
 	content := "0123456789"
-	checksum := storage.EncodeCRC32(crc32.ChecksumIEEE([]byte(content)))
+	checksum := sha256Checksum(content)
 	handlers.PutObject(httptest.NewRecorder(), newPutRequest(key, content))
 
 	newReq := func(method string) *http.Request {
@@ -201,8 +216,8 @@ func TestGetObjectChecksumHeaders(t *testing.T) {
 	t.Run("get", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		handlers.GetObject(w, newReq("GET"))
-		if got := w.Header().Get("x-amz-checksum-crc32"); got != checksum {
-			t.Errorf("x-amz-checksum-crc32 = %q, want %q", got, checksum)
+		if got := w.Header().Get("x-amz-checksum-sha256"); got != checksum {
+			t.Errorf("x-amz-checksum-sha256 = %q, want %q", got, checksum)
 		}
 		if got := w.Header().Get("x-amz-checksum-type"); got != "FULL_OBJECT" {
 			t.Errorf("x-amz-checksum-type = %q, want FULL_OBJECT", got)
@@ -212,8 +227,8 @@ func TestGetObjectChecksumHeaders(t *testing.T) {
 	t.Run("head", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		handlers.HeadObject(w, newReq("HEAD"))
-		if got := w.Header().Get("x-amz-checksum-crc32"); got != checksum {
-			t.Errorf("x-amz-checksum-crc32 = %q, want %q", got, checksum)
+		if got := w.Header().Get("x-amz-checksum-sha256"); got != checksum {
+			t.Errorf("x-amz-checksum-sha256 = %q, want %q", got, checksum)
 		}
 	})
 
@@ -225,7 +240,7 @@ func TestGetObjectChecksumHeaders(t *testing.T) {
 		if w.Code != http.StatusPartialContent {
 			t.Fatalf("status = %d, want %d", w.Code, http.StatusPartialContent)
 		}
-		if got := w.Header().Get("x-amz-checksum-crc32"); got != "" {
+		if got := w.Header().Get("x-amz-checksum-sha256"); got != "" {
 			t.Errorf("range response should not have a checksum, got %q", got)
 		}
 	})
@@ -249,24 +264,24 @@ func TestUploadPartChecksum(t *testing.T) {
 	}
 
 	content := "part data"
-	checksum := storage.EncodeCRC32(crc32.ChecksumIEEE([]byte(content)))
+	checksum := sha256Checksum(content)
 
 	t.Run("matching header", func(t *testing.T) {
 		req := newPartRequest(1, content)
-		req.Header.Set("x-amz-checksum-crc32", checksum)
+		req.Header.Set("x-amz-checksum-sha256", checksum)
 		w := httptest.NewRecorder()
 		handlers.UploadPart(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 		}
-		if got := w.Header().Get("x-amz-checksum-crc32"); got != checksum {
-			t.Errorf("x-amz-checksum-crc32 = %q, want %q", got, checksum)
+		if got := w.Header().Get("x-amz-checksum-sha256"); got != checksum {
+			t.Errorf("x-amz-checksum-sha256 = %q, want %q", got, checksum)
 		}
 	})
 
 	t.Run("mismatching header", func(t *testing.T) {
 		req := newPartRequest(2, content)
-		req.Header.Set("x-amz-checksum-crc32", storage.EncodeCRC32(0))
+		req.Header.Set("x-amz-checksum-sha256", sha256Checksum("other part data"))
 		w := httptest.NewRecorder()
 		handlers.UploadPart(w, req)
 		assertErrorCode(t, w, http.StatusBadRequest, s3.ErrBadDigest)
