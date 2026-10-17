@@ -830,10 +830,16 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 	defer idx.mu.RUnlock()
 
 	// Each object and each common prefix counts as one entry against
-	// MaxKeys, as in S3. lastToken is the continuation token for the last
-	// entry. After a common prefix, the scan restarts past all keys under it.
+	// MaxKeys, as in S3. last is the last entry, from which the
+	// continuation token is made if the page is truncated. After a common
+	// prefix, the scan restarts past all keys under it.
 	count := 0
-	lastToken := ""
+	last, lastIsPrefix := "", false
+	truncate := func() bool {
+		result.IsTruncated = true
+		result.NextContinuationToken = listToken(last, lastIsPrefix)
+		return false
+	}
 	for done := false; !done; {
 		done = true
 		idx.tree.AscendGreaterOrEqual(&indexEntry{key: cursor}, func(e *indexEntry) bool {
@@ -848,13 +854,11 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 				if delimIdx := strings.Index(afterPrefix, opts.Delimiter); delimIdx >= 0 {
 					commonPrefix := opts.Prefix + afterPrefix[:delimIdx+len(opts.Delimiter)]
 					if count >= opts.MaxKeys {
-						result.IsTruncated = true
-						result.NextContinuationToken = lastToken
-						return false
+						return truncate()
 					}
 					result.CommonPrefixes = append(result.CommonPrefixes, commonPrefix)
 					count++
-					lastToken = listToken(commonPrefix, true)
+					last, lastIsPrefix = commonPrefix, true
 					if next, ok := prefixSuccessor(commonPrefix); ok {
 						cursor, done = next, false
 					}
@@ -862,13 +866,11 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 				}
 			}
 			if count >= opts.MaxKeys {
-				result.IsTruncated = true
-				result.NextContinuationToken = lastToken
-				return false
+				return truncate()
 			}
 			result.Objects = append(result.Objects, e.metadata())
 			count++
-			lastToken = listToken(e.key, false)
+			last, lastIsPrefix = e.key, false
 			return true
 		})
 	}
