@@ -193,7 +193,7 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	var totalSize int64
 	compositeHash := sha256.New()
 
-	for _, part := range parts {
+	for i, part := range parts {
 		// The part number is an int, so the file name cannot contain a path
 		// separator or "..".
 		partFilename := fmt.Sprintf("part.%05d", part.PartNumber)
@@ -227,6 +227,11 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 
 		if expectedETag != actualETag {
 			return nil, fmt.Errorf("part %d ETag mismatch: expected %s, got %s", part.PartNumber, expectedETag, actualETag)
+		}
+
+		// Every part except the last must be at least the minimum part size
+		if i < len(parts)-1 && partMeta.Size < fs.minPartSize {
+			return nil, fmt.Errorf("part %d is %d bytes, minimum is %d: %w", part.PartNumber, partMeta.Size, fs.minPartSize, ErrEntityTooSmall)
 		}
 
 		partSum, err := partDigest(&partMeta, partPath)

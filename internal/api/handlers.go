@@ -833,6 +833,10 @@ func (h *Handlers) CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 			s3.WriteErrorResponse(w, s3.ErrInvalidPart)
 			return
 		}
+		if errors.Is(err, storage.ErrEntityTooSmall) {
+			s3.WriteErrorResponse(w, s3.ErrEntityTooSmall)
+			return
+		}
 		if errors.Is(err, storage.ErrInvalidPartOrder) {
 			s3.WriteErrorResponse(w, s3.ErrInvalidPartOrder)
 			return

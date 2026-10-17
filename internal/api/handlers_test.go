@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -495,11 +496,12 @@ func TestMultipartUploadHandlers(t *testing.T) {
 		uploadID = result.UploadID
 	})
 
-	// Upload parts
+	// Upload parts. All parts but the last must be at least the minimum part size.
+	part1Content := bytes.Repeat([]byte("1"), storage.MinPartSize)
 	var part1ETag, part2ETag string
 	t.Run("upload parts", func(t *testing.T) {
 		// Part 1
-		req1 := httptest.NewRequest("PUT", "/test-bucket/"+key+"?partNumber=1&uploadId="+uploadID, bytes.NewReader([]byte("Part 1 content")))
+		req1 := httptest.NewRequest("PUT", "/test-bucket/"+key+"?partNumber=1&uploadId="+uploadID, bytes.NewReader(part1Content))
 		req1.SetPathValue("bucket", "test-bucket")
 		req1.SetPathValue("key", key)
 		w1 := httptest.NewRecorder()
@@ -569,11 +571,38 @@ func TestMultipartUploadHandlers(t *testing.T) {
 			t.Fatalf("GET status = %d, want %d", w.Code, http.StatusOK)
 		}
 
-		expectedContent := "Part 1 contentPart 2 content"
+		expectedContent := string(part1Content) + "Part 2 content"
 		if w.Body.String() != expectedContent {
-			t.Errorf("content = %q, want %q", w.Body.String(), expectedContent)
+			t.Errorf("content mismatch: got %d bytes, want %d", w.Body.Len(), len(expectedContent))
 		}
 	})
+}
+
+func TestCompleteMultipartUploadEntityTooSmall(t *testing.T) {
+	handlers, store, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	key := "too-small.txt"
+	uploadID, err := store.CreateMultipartUpload("test-bucket", key, "text/plain", nil)
+	if err != nil {
+		t.Fatalf("CreateMultipartUpload failed: %v", err)
+	}
+	completeXML := "<CompleteMultipartUpload>"
+	for i := 1; i <= 2; i++ {
+		meta, err := store.UploadPart(uploadID, i, strings.NewReader("small part"))
+		if err != nil {
+			t.Fatalf("UploadPart %d failed: %v", i, err)
+		}
+		completeXML += fmt.Sprintf("<Part><PartNumber>%d</PartNumber><ETag>%s</ETag></Part>", i, meta.ETag)
+	}
+	completeXML += "</CompleteMultipartUpload>"
+
+	req := httptest.NewRequest("POST", "/test-bucket/"+key+"?uploadId="+uploadID, strings.NewReader(completeXML))
+	req.SetPathValue("bucket", "test-bucket")
+	req.SetPathValue("key", key)
+	w := httptest.NewRecorder()
+	handlers.CompleteMultipartUpload(w, req)
+	assertErrorCode(t, w, http.StatusBadRequest, s3.ErrEntityTooSmall)
 }
 
 func TestAbortMultipartUpload(t *testing.T) {
