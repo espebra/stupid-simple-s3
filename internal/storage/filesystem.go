@@ -300,27 +300,37 @@ func (fs *FilesystemStorage) BucketExists(name string) (bool, error) {
 // reviving a bucket that was deleted concurrently.
 func createObjectDir(objPath string) error {
 	shardPath := filepath.Dir(objPath)
-	objectsPath := filepath.Dir(shardPath)
-	// DeleteObject removes empty shard directories, so a shard directory can
-	// disappear between the two Mkdir calls. Retry a few times when it does.
 	var err error
 	for range 3 {
-		if err = os.Mkdir(shardPath, 0700); err == nil || os.IsExist(err) {
-			if err = os.Mkdir(objPath, 0700); err == nil || os.IsExist(err) {
-				return nil
+		// Only DeleteBucket removes the objects directory, so failing to
+		// create a shard directory inside it means the bucket is gone or
+		// being deleted.
+		if err = os.Mkdir(shardPath, 0700); err != nil && !os.IsExist(err) {
+			if isMissingDirError(err) {
+				return ErrBucketNotFound
 			}
+			return fmt.Errorf("creating shard directory: %w", err)
 		}
-		// Creating a directory inside one that is being removed fails with
-		// ENOENT on Linux and EINVAL on macOS, so check whether the bucket
-		// still exists rather than relying on the error.
-		if _, statErr := os.Stat(objectsPath); os.IsNotExist(statErr) {
-			return ErrBucketNotFound
+		// DeleteObject removes empty shard directories, so the shard can
+		// disappear before the object directory is created in it. Retry a
+		// few times when it does.
+		if err = os.Mkdir(objPath, 0700); err == nil || os.IsExist(err) {
+			return nil
 		}
-		if !os.IsNotExist(err) {
+		if !isMissingDirError(err) {
 			break
 		}
 	}
 	return fmt.Errorf("creating object directory: %w", err)
+}
+
+// isMissingDirError reports whether a Mkdir failed because its parent
+// directory does not exist or is being removed. Creating a directory inside
+// one that is being removed fails with ENOENT on Linux and EINVAL on macOS.
+// On Linux, the removed directory can still be found by os.Stat for a short
+// time after Mkdir fails, so the error is the reliable signal.
+func isMissingDirError(err error) bool {
+	return os.IsNotExist(err) || errors.Is(err, syscall.EINVAL)
 }
 
 // DeleteBucket deletes a bucket (must be empty)
