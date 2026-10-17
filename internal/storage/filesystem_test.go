@@ -743,6 +743,34 @@ func TestCompleteMultipartUploadLegacyPart(t *testing.T) {
 	}
 }
 
+func TestPutObjectMissingBucket(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	_, err := storage.PutObject("missing-bucket", "key", "text/plain", nil, bytes.NewReader([]byte("data")))
+	if !errors.Is(err, ErrBucketNotFound) {
+		t.Errorf("PutObject err = %v, want ErrBucketNotFound", err)
+	}
+	if exists, _ := storage.BucketExists("missing-bucket"); exists {
+		t.Error("PutObject created the missing bucket")
+	}
+}
+
+func TestDeleteBucketNotEmpty(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	if _, err := storage.PutObject(testBucket, "key", "text/plain", nil, bytes.NewReader([]byte("data"))); err != nil {
+		t.Fatalf("PutObject failed: %v", err)
+	}
+	if err := storage.DeleteBucket(testBucket); !errors.Is(err, ErrBucketNotEmpty) {
+		t.Errorf("DeleteBucket err = %v, want ErrBucketNotEmpty", err)
+	}
+	if exists, _ := storage.ObjectExists(testBucket, "key"); !exists {
+		t.Error("object was removed by a failed DeleteBucket")
+	}
+}
+
 func TestCompleteMultipartUploadMinPartSize(t *testing.T) {
 	storage, cleanup := setupTestStorage(t)
 	defer cleanup()

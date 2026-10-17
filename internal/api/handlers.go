@@ -283,6 +283,10 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 			s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
 			return
 		}
+		if errors.Is(err, storage.ErrBucketNotFound) {
+			s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
+			return
+		}
 		slog.Error("failed to put object", "error", err, "bucket", bucket, "key", key, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
@@ -330,6 +334,10 @@ func (h *Handlers) CopyObject(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectNotFound) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
+			return
+		}
+		if errors.Is(err, storage.ErrBucketNotFound) {
+			s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 			return
 		}
 		slog.Error("failed to copy object", "error", err, "src_bucket", srcBucket, "src_key", srcKey, "dst_bucket", dstBucket, "dst_key", dstKey, "request_id", GetRequestID(r))
@@ -843,6 +851,10 @@ func (h *Handlers) CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 		}
 		if errors.Is(err, storage.ErrUploadNotFound) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchUpload)
+			return
+		}
+		if errors.Is(err, storage.ErrBucketNotFound) {
+			s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 			return
 		}
 		slog.Error("failed to complete multipart upload", "error", err, "bucket", bucket, "key", key, "upload_id", uploadID, "request_id", GetRequestID(r))

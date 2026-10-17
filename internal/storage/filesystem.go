@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -293,6 +294,35 @@ func (fs *FilesystemStorage) BucketExists(name string) (bool, error) {
 	return false, fmt.Errorf("checking bucket existence: %w", err)
 }
 
+// createObjectDir creates an object directory and its shard directory inside
+// the bucket's objects directory. Unlike os.MkdirAll it never creates the
+// objects directory itself, so it returns ErrBucketNotFound instead of
+// reviving a bucket that was deleted concurrently.
+func createObjectDir(objPath string) error {
+	shardPath := filepath.Dir(objPath)
+	objectsPath := filepath.Dir(shardPath)
+	// DeleteObject removes empty shard directories, so a shard directory can
+	// disappear between the two Mkdir calls. Retry a few times when it does.
+	var err error
+	for range 3 {
+		if err = os.Mkdir(shardPath, 0700); err == nil || os.IsExist(err) {
+			if err = os.Mkdir(objPath, 0700); err == nil || os.IsExist(err) {
+				return nil
+			}
+		}
+		// Creating a directory inside one that is being removed fails with
+		// ENOENT on Linux and EINVAL on macOS, so check whether the bucket
+		// still exists rather than relying on the error.
+		if _, statErr := os.Stat(objectsPath); os.IsNotExist(statErr) {
+			return ErrBucketNotFound
+		}
+		if !os.IsNotExist(err) {
+			break
+		}
+	}
+	return fmt.Errorf("creating object directory: %w", err)
+}
+
 // DeleteBucket deletes a bucket (must be empty)
 func (fs *FilesystemStorage) DeleteBucket(name string) error {
 	if err := ValidateBucketName(name); err != nil {
@@ -307,17 +337,21 @@ func (fs *FilesystemStorage) DeleteBucket(name string) error {
 		return ErrBucketNotFound
 	}
 
-	// Check if bucket is empty by looking for any files in objects directory
-	entries, err := os.ReadDir(objectsPath)
-	if err != nil {
-		return fmt.Errorf("reading bucket contents: %w", err)
+	// Remove the objects directory first. Unlike checking for entries and
+	// then removing the tree, os.Remove fails atomically if anything is in
+	// the directory, including an object created concurrently. Writers create
+	// object directories without recreating objects/ (createObjectDir), so a
+	// write that races with the removal fails instead of reviving the bucket.
+	if err := os.Remove(objectsPath); err != nil {
+		if errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
+			return ErrBucketNotEmpty
+		}
+		if os.IsNotExist(err) {
+			return ErrBucketNotFound
+		}
+		return fmt.Errorf("removing objects directory: %w", err)
 	}
-	if len(entries) > 0 {
-		return ErrBucketNotEmpty
-	}
-
-	// Remove the bucket directory
-	if err := os.RemoveAll(bucketPath); err != nil {
+	if err := os.Remove(bucketPath); err != nil {
 		return fmt.Errorf("removing bucket directory: %w", err)
 	}
 
@@ -334,8 +368,8 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 	metaPath := filepath.Join(objPath, "meta.json")
 
 	// Create object directory
-	if err := os.MkdirAll(objPath, 0700); err != nil {
-		return nil, fmt.Errorf("creating object directory: %w", err)
+	if err := createObjectDir(objPath); err != nil {
+		return nil, err
 	}
 
 	// Defense in depth: verify created directory is within base path (catches symlink attacks)
