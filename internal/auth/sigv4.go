@@ -4,8 +4,8 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -27,6 +27,18 @@ const (
 	MaxClockSkew = 15 * time.Minute
 	// MaxPresignedExpiry is the maximum allowed expiry time for presigned URLs (7 days)
 	MaxPresignedExpiry = 7 * 24 * 60 * 60
+)
+
+// Errors returned by VerifyRequest. They are fixed values that never include
+// request data, so they are safe to log.
+var (
+	ErrMissingAuthorization = errors.New("missing Authorization header")
+	ErrMissingDate          = errors.New("missing X-Amz-Date header")
+	ErrInvalidDate          = errors.New("invalid X-Amz-Date format")
+	ErrRequestTimeTooSkewed = errors.New("request time too skewed")
+	ErrDateMismatch         = errors.New("date mismatch between Authorization and X-Amz-Date")
+	ErrInvalidIPHeader      = errors.New("invalid IP address in a signed IP header")
+	ErrSignatureMismatch    = errors.New("signature mismatch")
 )
 
 // SignatureV4 handles AWS Signature Version 4 verification
@@ -99,7 +111,7 @@ func (s *SignatureV4) VerifyRequest(r *http.Request, secretKey string) (*AuthRes
 	// Parse authorization header
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
-		return nil, fmt.Errorf("missing Authorization header")
+		return nil, ErrMissingAuthorization
 	}
 
 	parsed, err := s.ParseAuthorization(authHeader)
@@ -110,12 +122,12 @@ func (s *SignatureV4) VerifyRequest(r *http.Request, secretKey string) (*AuthRes
 	// Get and validate timestamp
 	amzDate := r.Header.Get("X-Amz-Date")
 	if amzDate == "" {
-		return nil, fmt.Errorf("missing X-Amz-Date header")
+		return nil, ErrMissingDate
 	}
 
 	requestTime, err := time.Parse(TimeFormat, amzDate)
 	if err != nil {
-		return nil, fmt.Errorf("invalid X-Amz-Date format: %w", err)
+		return nil, ErrInvalidDate
 	}
 
 	// Check clock skew
@@ -125,12 +137,12 @@ func (s *SignatureV4) VerifyRequest(r *http.Request, secretKey string) (*AuthRes
 		diff = -diff
 	}
 	if diff > MaxClockSkew {
-		return nil, fmt.Errorf("request time too skewed: %v", diff)
+		return nil, ErrRequestTimeTooSkewed
 	}
 
 	// Verify date in Authorization matches X-Amz-Date
 	if parsed.Date != requestTime.Format(DateFormat) {
-		return nil, fmt.Errorf("date mismatch between Authorization and X-Amz-Date")
+		return nil, ErrDateMismatch
 	}
 
 	// Build canonical request
@@ -149,10 +161,7 @@ func (s *SignatureV4) VerifyRequest(r *http.Request, secretKey string) (*AuthRes
 
 	// Compare signatures
 	if !hmac.Equal([]byte(expectedSignature), []byte(parsed.Signature)) {
-		slog.Debug("signature mismatch",
-			"provided_signature", parsed.Signature,
-		)
-		return nil, fmt.Errorf("signature mismatch")
+		return nil, ErrSignatureMismatch
 	}
 
 	result := &AuthResult{
@@ -289,7 +298,7 @@ func (s *SignatureV4) buildCanonicalHeaders(r *http.Request, signedHeaders []str
 
 		// Validate IP-related headers contain valid IP addresses
 		if ipHeaders[lowerH] && !isValidIPHeader(value) {
-			return "", fmt.Errorf("invalid IP address in header %s", h)
+			return "", ErrInvalidIPHeader
 		}
 
 		headers = append(headers, lowerH+":"+value+"\n")
@@ -470,10 +479,7 @@ func (s *SignatureV4) VerifyPresignedRequest(r *http.Request, secretKey string) 
 
 	// Compare signatures
 	if !hmac.Equal([]byte(expectedSignature), []byte(parsed.Signature)) {
-		slog.Debug("presigned signature mismatch",
-			"provided_signature", parsed.Signature,
-		)
-		return nil, fmt.Errorf("signature mismatch")
+		return nil, ErrSignatureMismatch
 	}
 
 	return &AuthResult{
