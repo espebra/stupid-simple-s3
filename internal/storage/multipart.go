@@ -247,8 +247,8 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	if keyErr != nil {
 		return nil, keyErr
 	}
-	if err := os.MkdirAll(objPath, 0700); err != nil {
-		return nil, fmt.Errorf("creating object directory: %w", err)
+	if err := createObjectDir(objPath); err != nil {
+		return nil, err
 	}
 
 	dataPath := filepath.Join(objPath, "data")

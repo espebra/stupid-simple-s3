@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"runtime"
@@ -906,5 +907,62 @@ func TestConcurrentUploadsOfSamePart(t *testing.T) {
 	}
 	if objMeta.Size != partSize {
 		t.Errorf("object size = %d, want %d", objMeta.Size, partSize)
+	}
+}
+
+// TestConcurrentPutAndDeleteBucket tests that an object written while its
+// bucket is being deleted is either stored in a bucket that still exists, or
+// rejected with the bucket gone. It must never be lost or revive the bucket.
+func TestConcurrentPutAndDeleteBucket(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	const bucket = "race-bucket"
+	for i := range 200 {
+		if err := storage.CreateBucket(bucket); err != nil {
+			t.Fatalf("iteration %d: CreateBucket failed: %v", i, err)
+		}
+
+		var putErr, deleteErr error
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, putErr = storage.PutObject(bucket, "key", "text/plain", nil, bytes.NewReader([]byte("data")))
+		}()
+		go func() {
+			defer wg.Done()
+			deleteErr = storage.DeleteBucket(bucket)
+		}()
+		wg.Wait()
+
+		exists, err := storage.BucketExists(bucket)
+		if err != nil {
+			t.Fatalf("iteration %d: BucketExists failed: %v", i, err)
+		}
+		switch {
+		case putErr == nil:
+			if !errors.Is(deleteErr, ErrBucketNotEmpty) {
+				t.Fatalf("iteration %d: object stored but DeleteBucket returned %v", i, deleteErr)
+			}
+			if objExists, _ := storage.ObjectExists(bucket, "key"); !objExists {
+				t.Fatalf("iteration %d: stored object was lost", i)
+			}
+			if err := storage.DeleteObject(bucket, "key"); err != nil {
+				t.Fatalf("iteration %d: DeleteObject failed: %v", i, err)
+			}
+			if err := storage.DeleteBucket(bucket); err != nil {
+				t.Fatalf("iteration %d: DeleteBucket after DeleteObject failed: %v", i, err)
+			}
+		case errors.Is(putErr, ErrBucketNotFound):
+			if deleteErr != nil {
+				t.Fatalf("iteration %d: PutObject found no bucket but DeleteBucket returned %v", i, deleteErr)
+			}
+			if exists {
+				t.Fatalf("iteration %d: rejected PutObject revived the bucket", i)
+			}
+		default:
+			t.Fatalf("iteration %d: PutObject returned %v", i, putErr)
+		}
 	}
 }
