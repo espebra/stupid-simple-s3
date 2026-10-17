@@ -394,6 +394,10 @@ func (h *Handlers) CopyObject(w http.ResponseWriter, r *http.Request) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchBucket)
 			return
 		}
+		if errors.Is(err, storage.ErrInvalidKey) {
+			s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
+			return
+		}
 		slog.Error("failed to copy object", "error", err, "src_bucket", srcBucket, "src_key", srcKey, "dst_bucket", dstBucket, "dst_key", dstKey, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
@@ -446,6 +450,10 @@ func (h *Handlers) GetObject(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectNotFound) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
+			return
+		}
+		if errors.Is(err, storage.ErrInvalidKey) {
+			s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
 			return
 		}
 		slog.Error("failed to get object", "error", err, "bucket", bucket, "key", key, "request_id", GetRequestID(r))
@@ -586,6 +594,10 @@ func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectNotFound) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
+			return
+		}
+		if errors.Is(err, storage.ErrInvalidKey) {
+			s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
 			return
 		}
 		slog.Error("failed to open object for range request", "error", err, "bucket", bucket, "key", key, "request_id", GetRequestID(r))
@@ -768,6 +780,10 @@ func (h *Handlers) HeadObject(w http.ResponseWriter, r *http.Request) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
 			return
 		}
+		if errors.Is(err, storage.ErrInvalidKey) {
+			s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
+			return
+		}
 		slog.Error("failed to head object", "error", err, "bucket", bucket, "key", key, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
@@ -819,6 +835,10 @@ func (h *Handlers) DeleteObject(w http.ResponseWriter, r *http.Request) {
 
 	err := h.storage.DeleteObject(bucket, key)
 	if err != nil {
+		if errors.Is(err, storage.ErrInvalidKey) {
+			s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
+			return
+		}
 		slog.Error("failed to delete object", "error", err, "bucket", bucket, "key", key, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
@@ -1336,7 +1356,13 @@ func (h *Handlers) DeleteObjects(w http.ResponseWriter, r *http.Request) {
 
 	for _, obj := range deleteReq.Objects {
 		err := h.storage.DeleteObject(bucket, obj.Key)
-		if err != nil {
+		if errors.Is(err, storage.ErrInvalidKey) {
+			result.Error = append(result.Error, s3.DeleteError{
+				Key:     obj.Key,
+				Code:    string(s3.ErrInvalidArgument),
+				Message: "Invalid object key",
+			})
+		} else if err != nil {
 			slog.Error("failed to delete object in batch", "error", err, "bucket", bucket, "key", obj.Key, "request_id", GetRequestID(r))
 			result.Error = append(result.Error, s3.DeleteError{
 				Key:     obj.Key,

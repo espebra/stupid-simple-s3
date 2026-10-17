@@ -2334,3 +2334,58 @@ func TestTruncatedUploadIsRejected(t *testing.T) {
 		t.Error("truncated upload was stored")
 	}
 }
+
+func TestInvalidKeyIsClientError(t *testing.T) {
+	handlers, _, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	// Keys that ValidateKey rejects cannot be stored, so requests for them
+	// are client errors, not internal errors
+	for _, key := range []string{strings.Repeat("k", 1025), `a\..\b`} {
+		for _, tc := range []struct {
+			method  string
+			header  string
+			handler func(http.ResponseWriter, *http.Request)
+		}{
+			{"GET", "", handlers.GetObject},
+			{"GET", "Range", handlers.GetObject},
+			{"HEAD", "", handlers.HeadObject},
+			{"DELETE", "", handlers.DeleteObject},
+		} {
+			req := httptest.NewRequest(tc.method, "/test-bucket/key", nil)
+			req.SetPathValue("bucket", "test-bucket")
+			req.SetPathValue("key", key)
+			if tc.header == "Range" {
+				req.Header.Set("Range", "bytes=0-1")
+			}
+			w := httptest.NewRecorder()
+			tc.handler(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("%s %s key %.10q: status = %d, want %d", tc.method, tc.header, key, w.Code, http.StatusBadRequest)
+			}
+		}
+	}
+
+	t.Run("copy source", func(t *testing.T) {
+		req := httptest.NewRequest("PUT", "/test-bucket/dst", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", "dst")
+		req.Header.Set("X-Amz-Copy-Source", "/test-bucket/"+strings.Repeat("k", 1025))
+		w := httptest.NewRecorder()
+		handlers.PutObject(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+		}
+	})
+
+	t.Run("delete objects", func(t *testing.T) {
+		body := `<Delete><Object><Key>` + strings.Repeat("k", 1025) + `</Key></Object></Delete>`
+		req := httptest.NewRequest("POST", "/test-bucket?delete", strings.NewReader(body))
+		req.SetPathValue("bucket", "test-bucket")
+		w := httptest.NewRecorder()
+		handlers.DeleteObjects(w, req)
+		if !strings.Contains(w.Body.String(), "<Code>InvalidArgument</Code>") {
+			t.Errorf("body = %s, want an InvalidArgument error", w.Body.String())
+		}
+	})
+}
