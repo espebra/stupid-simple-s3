@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -220,8 +221,8 @@ func TestVerifyRequest(t *testing.T) {
 		if err == nil {
 			t.Error("expected error for time skew")
 		}
-		if !strings.Contains(err.Error(), "skewed") {
-			t.Errorf("expected time skew error, got: %v", err)
+		if !errors.Is(err, ErrRequestTimeTooSkewed) {
+			t.Errorf("expected ErrRequestTimeTooSkewed, got: %v", err)
 		}
 	})
 
@@ -238,6 +239,22 @@ func TestVerifyRequest(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "mismatch") {
 			t.Errorf("expected signature mismatch error, got: %v", err)
+		}
+	})
+
+	// Errors are fixed values that do not echo request headers, so they are
+	// safe to log
+	t.Run("errors do not include header values", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/my-bucket/test.txt", nil)
+		req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/"+dateStamp+"/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+		req.Header.Set("X-Amz-Date", "not-a-date-secret")
+
+		_, err := sigv4.VerifyRequest(req, secretKey)
+		if !errors.Is(err, ErrInvalidDate) {
+			t.Errorf("err = %v, want ErrInvalidDate", err)
+		}
+		if err != nil && strings.Contains(err.Error(), "secret") {
+			t.Errorf("error includes the header value: %v", err)
 		}
 	})
 }

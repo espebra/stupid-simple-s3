@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"math"
 	"strconv"
 	"strings"
 
@@ -84,19 +83,17 @@ func (r *awsChunkedReader) Read(p []byte) (n int, err error) {
 			r.remaining = chunkSize
 		}
 
-		// Read chunk data. toRead starts from the remaining space in p (an
-		// int) and is only ever reduced, so it always fits back into an int.
-		toRead := len(p) - n
-		if int64(toRead) > r.remaining {
-			if r.remaining > int64(math.MaxInt) {
-				return n, fmt.Errorf("chunk size too large for platform int: %d", r.remaining)
-			}
-			toRead = int(r.remaining)
+		// Read chunk data, at most the rest of the chunk. Slicing with the
+		// int64 directly, only when it is smaller than the buffer, avoids
+		// converting the client-supplied chunk size to an int.
+		buf := p[n:]
+		if int64(len(buf)) > r.remaining {
+			buf = buf[:r.remaining]
 		}
 
-		read, err := r.reader.Read(p[n : n+toRead])
+		read, err := r.reader.Read(buf)
 		if r.verifier != nil {
-			r.chunkHash.Write(p[n : n+read])
+			r.chunkHash.Write(buf[:read])
 		}
 		n += read
 		r.remaining -= int64(read)

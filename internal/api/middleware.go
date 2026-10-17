@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -485,7 +486,7 @@ func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			if err != nil {
 				time.Sleep(authFailureDelay)
 				// Check for specific error types
-				if strings.Contains(err.Error(), "skewed") {
+				if errors.Is(err, auth.ErrRequestTimeTooSkewed) {
 					metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonTimeSkew).Inc()
 					slog.Debug("auth failure: request time too skewed",
 						"client_ip", clientIP,
