@@ -183,6 +183,36 @@ Presigned URL parameters:
 - Maximum expiry time: 7 days (604800 seconds)
 - Supported operations: GET (download), PUT (upload), HEAD, DELETE
 
+## Checksums and ETags
+
+Uploads are verified when the client sends a SHA-256 checksum (`x-amz-checksum-sha256`), either as a header or as an aws-chunked trailer. An upload whose data does not match is rejected with `400 BadDigest` and is not stored. Checksums using other algorithms are accepted but not verified. AWS SDKs send CRC32 by default, so clients must ask for SHA-256 to get their uploads verified:
+
+```bash
+# AWS CLI
+aws --endpoint-url http://localhost:5553 s3 cp file.txt s3://my-bucket/file.txt --checksum-algorithm SHA256
+```
+
+```go
+// AWS SDK for Go v2: set ChecksumAlgorithm on PutObject, CreateMultipartUpload and UploadPart
+client.PutObject(ctx, &s3.PutObjectInput{
+	Bucket:            aws.String("my-bucket"),
+	Key:               aws.String("file.txt"),
+	Body:              body,
+	ChecksumAlgorithm: types.ChecksumAlgorithmSha256,
+})
+```
+
+Other SDKs have the same setting, for example `ChecksumAlgorithm='SHA256'` in boto3.
+
+PutObject, GetObject, HeadObject, UploadPart and CompleteMultipartUpload return the stored checksum in `x-amz-checksum-sha256`, with its type in `x-amz-checksum-type`:
+
+- `FULL_OBJECT` for objects uploaded with PutObject: the base64 SHA-256 of the object data. AWS SDKs validate downloads against it when response checksum validation is enabled, which is their default.
+- `COMPOSITE` for multipart objects: the base64 SHA-256 of the concatenated binary SHA-256 digests of the parts, followed by `-N` where N is the number of parts. SDKs cannot recompute it from the object data and skip validating it.
+
+Range requests do not return a checksum. Objects stored before SHA-256 checksums were introduced have none.
+
+ETags are derived from the same digests: `"sha256-<hex>"` for objects and parts, and `"sha256-<hex>-N"` for multipart objects. They depend only on the content, so uploading identical data again keeps the ETag. They are not MD5 digests, so tools that compare ETags with a locally computed MD5 cannot use them. The `-` is intentional: AWS SDK for Java v1 treats an ETag without one as an MD5 digest and fails to validate it.
+
 ## Supported S3 Operations
 
 | Operation | Method | Path |
