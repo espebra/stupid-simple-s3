@@ -1611,22 +1611,44 @@ func TestAccessLogRedactsPresignedURLs(t *testing.T) {
 
 func TestDetectOperation(t *testing.T) {
 	tests := []struct {
-		target string
-		want   string
+		method     string
+		target     string
+		copySource string
+		want       string
 	}{
-		{"/bucket", metrics.OpListObjects},
-		{"/bucket?list-type=2&prefix=a", metrics.OpListObjects},
-		{"/bucket/", metrics.OpListObjects},
-		{"/bucket?location", metrics.OpGetBucketLocation},
-		{"/bucket?uploads", metrics.OpListMultipartUploads},
-		{"/bucket/key", metrics.OpGetObject},
-		{"/bucket/dir/key", metrics.OpGetObject},
-		{"/bucket/key?uploadId=abc", metrics.OpListParts},
+		{"GET", "/bucket", "", metrics.OpListObjects},
+		{"GET", "/bucket?list-type=2&prefix=a", "", metrics.OpListObjects},
+		{"GET", "/bucket/", "", metrics.OpListObjects},
+		{"GET", "/bucket?location", "", metrics.OpGetBucketLocation},
+		{"GET", "/bucket?uploads", "", metrics.OpListMultipartUploads},
+		{"GET", "/bucket/key", "", metrics.OpGetObject},
+		{"GET", "/bucket/dir/key", "", metrics.OpGetObject},
+		{"GET", "/bucket/key?uploadId=abc", "", metrics.OpListParts},
+		{"HEAD", "/bucket", "", metrics.OpHeadBucket},
+		{"HEAD", "/bucket/", "", metrics.OpHeadBucket},
+		{"HEAD", "/bucket/key", "", metrics.OpHeadObject},
+		{"PUT", "/bucket", "", metrics.OpCreateBucket},
+		{"PUT", "/bucket/", "", metrics.OpCreateBucket},
+		{"PUT", "/bucket/key", "", metrics.OpPutObject},
+		{"PUT", "/bucket/key", "/other-bucket/source", metrics.OpCopyObject},
+		{"PUT", "/bucket/key?partNumber=1&uploadId=abc", "", metrics.OpUploadPart},
+		{"DELETE", "/bucket", "", metrics.OpDeleteBucket},
+		{"DELETE", "/bucket/", "", metrics.OpDeleteBucket},
+		{"DELETE", "/bucket/key", "", metrics.OpDeleteObject},
+		{"DELETE", "/bucket/key?uploadId=abc", "", metrics.OpAbortMultipartUpload},
+		{"POST", "/bucket?delete", "", metrics.OpDeleteObjects},
+		{"POST", "/bucket/?delete", "", metrics.OpDeleteObjects},
+		{"POST", "/bucket", "", metrics.OpUnknown},
+		{"POST", "/bucket/key?uploads", "", metrics.OpCreateMultipartUpload},
+		{"POST", "/bucket/key?uploadId=abc", "", metrics.OpCompleteMultipartUpload},
 	}
 	for _, tt := range tests {
-		req := httptest.NewRequest("GET", tt.target, nil)
+		req := httptest.NewRequest(tt.method, tt.target, nil)
+		if tt.copySource != "" {
+			req.Header.Set("X-Amz-Copy-Source", tt.copySource)
+		}
 		if got := detectOperation(req); got != tt.want {
-			t.Errorf("detectOperation(GET %s) = %q, want %q", tt.target, got, tt.want)
+			t.Errorf("detectOperation(%s %s) = %q, want %q", tt.method, tt.target, got, tt.want)
 		}
 	}
 }
