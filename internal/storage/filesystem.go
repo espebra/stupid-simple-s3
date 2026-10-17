@@ -154,7 +154,9 @@ func ValidateBucketName(name string) error {
 
 // FilesystemStorage implements Storage using the local filesystem
 type FilesystemStorage struct {
-	basePath      string
+	basePath string
+	// realBase is basePath made absolute with symlinks resolved, at startup
+	realBase      string
 	multipartPath string
 	// minPartSize is the minimum size of all parts but the last when completing
 	// a multipart upload. It is MinPartSize except in tests.
@@ -214,8 +216,21 @@ func NewFilesystemStorage(basePath, multipartPath string) (*FilesystemStorage, e
 		return nil, fmt.Errorf("checking multipart directory: %w", err)
 	}
 
+	// Resolve the base path once. Object paths are checked against it on
+	// every request, so resolving it there would cost a stat per path
+	// component on every request.
+	realBase, err := filepath.Abs(basePath)
+	if err != nil {
+		return nil, fmt.Errorf("resolving base path: %w", err)
+	}
+	// Resolve symlinks, for cases like /tmp -> /private/tmp on macOS
+	if resolved, err := filepath.EvalSymlinks(realBase); err == nil {
+		realBase = resolved
+	}
+
 	return &FilesystemStorage{
 		basePath:      basePath,
+		realBase:      realBase,
 		multipartPath: multipartPath,
 		minPartSize:   MinPartSize,
 	}, nil
@@ -248,32 +263,12 @@ func (fs *FilesystemStorage) keyToPath(bucket, key string) (string, error) {
 	rel := filepath.Join(bucket, "objects", prefix, encodedKey)
 	result := filepath.Join(fs.basePath, "buckets", filepath.Clean("/"+rel))
 
-	// Defense in depth: verify the resulting path is within basePath
-	// First, resolve the base path (which should always exist)
-	absBase, err := filepath.Abs(fs.basePath)
-	if err != nil {
-		return "", fmt.Errorf("%w: failed to resolve base path", ErrInvalidKey)
-	}
-	// Resolve symlinks on base path to handle cases like /tmp -> /private/tmp on macOS
-	if realBase, err := filepath.EvalSymlinks(absBase); err == nil {
-		absBase = realBase
-	}
-
-	// For the result path, we need to resolve what exists and verify the rest
-	// Since the full path may not exist yet, resolve from the base and append the relative part
-	relPath := filepath.Join("buckets", bucket, "objects", prefix, encodedKey)
-	absResult := filepath.Join(absBase, relPath)
-
-	// If the result path exists (e.g., on read operations), verify via symlink resolution
-	if realResult, err := filepath.EvalSymlinks(absResult); err == nil {
-		// Path exists - verify the resolved path is still within base
-		if !strings.HasPrefix(realResult, absBase+string(filepath.Separator)) {
-			return "", fmt.Errorf("%w: path escapes base directory via symlink", ErrInvalidKey)
-		}
-	}
-
-	// Ensure the result path is within the base path
-	if !strings.HasPrefix(absResult, absBase+string(filepath.Separator)) {
+	// Defense in depth: verify the resulting path is within the base path.
+	// This is plain path arithmetic against the base path resolved at
+	// startup, with no system calls. Symlinks inside the storage tree are
+	// checked when a write creates its object directory (prepareObjectDir).
+	absResult := filepath.Join(fs.realBase, "buckets", filepath.Clean("/"+rel))
+	if !strings.HasPrefix(absResult, fs.realBase+string(filepath.Separator)) {
 		return "", fmt.Errorf("%w: path escapes base directory", ErrInvalidKey)
 	}
 
@@ -354,16 +349,14 @@ func (fs *FilesystemStorage) prepareObjectDir(objPath string) error {
 		return err
 	}
 
-	// Defense in depth: verify created directory is within base path (catches symlink attacks)
+	// Defense in depth: verify the created directory is within the base
+	// path after resolving symlinks, so that a symlink planted in the
+	// storage tree cannot make a write land outside it
 	realObjPath, err := filepath.EvalSymlinks(objPath)
 	if err != nil {
 		return fmt.Errorf("resolving object path: %w", err)
 	}
-	absBase, _ := filepath.Abs(fs.basePath)
-	if realBase, err := filepath.EvalSymlinks(absBase); err == nil {
-		absBase = realBase
-	}
-	if !strings.HasPrefix(realObjPath, absBase+string(filepath.Separator)) {
+	if !strings.HasPrefix(realObjPath, fs.realBase+string(filepath.Separator)) {
 		_ = os.RemoveAll(objPath) // Clean up potentially dangerous directory
 		return fmt.Errorf("%w: path escapes base directory via symlink", ErrInvalidKey)
 	}
