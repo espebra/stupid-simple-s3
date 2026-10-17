@@ -469,6 +469,43 @@ func (fs *FilesystemStorage) ListParts(uploadID string) ([]s3.PartMetadata, erro
 	return parts, nil
 }
 
+// ListMultipartUploads returns the in-progress multipart uploads in a bucket
+// whose keys start with prefix, sorted by key and then upload ID. Sorting by
+// upload ID rather than initiation time within a key matches how S3 applies
+// upload-id-marker, so pagination never skips or repeats an upload.
+func (fs *FilesystemStorage) ListMultipartUploads(bucket, prefix string) ([]s3.MultipartUploadMetadata, error) {
+	entries, err := os.ReadDir(fs.multipartPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading multipart directory: %w", err)
+	}
+
+	var uploads []s3.MultipartUploadMetadata
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		// GetMultipartUpload validates the name as an upload ID. Uploads that
+		// are completed, aborted or still being created while listing are
+		// skipped.
+		meta, err := fs.GetMultipartUpload(entry.Name())
+		if err != nil {
+			continue
+		}
+		if meta.Bucket != bucket || !strings.HasPrefix(meta.Key, prefix) {
+			continue
+		}
+		uploads = append(uploads, *meta)
+	}
+
+	sort.Slice(uploads, func(i, j int) bool {
+		if uploads[i].Key != uploads[j].Key {
+			return uploads[i].Key < uploads[j].Key
+		}
+		return uploads[i].UploadID < uploads[j].UploadID
+	})
+	return uploads, nil
+}
+
 // CountActiveUploads returns the number of active multipart uploads
 // by counting directories in the multipart upload path.
 func (fs *FilesystemStorage) CountActiveUploads() int {

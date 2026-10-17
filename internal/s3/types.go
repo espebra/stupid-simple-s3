@@ -22,6 +22,29 @@ type LocationConstraint struct {
 	Value   string   `xml:",chardata"`
 }
 
+// ListMultipartUploadsResult is the response for ListMultipartUploads
+type ListMultipartUploadsResult struct {
+	XMLName            xml.Name          `xml:"ListMultipartUploadsResult"`
+	Xmlns              string            `xml:"xmlns,attr"`
+	Bucket             string            `xml:"Bucket"`
+	KeyMarker          string            `xml:"KeyMarker"`
+	UploadIDMarker     string            `xml:"UploadIdMarker"`
+	NextKeyMarker      string            `xml:"NextKeyMarker,omitempty"`
+	NextUploadIDMarker string            `xml:"NextUploadIdMarker,omitempty"`
+	Prefix             string            `xml:"Prefix"`
+	MaxUploads         int               `xml:"MaxUploads"`
+	IsTruncated        bool              `xml:"IsTruncated"`
+	Uploads            []MultipartUpload `xml:"Upload"`
+}
+
+// MultipartUpload describes an in-progress upload in ListMultipartUploadsResult
+type MultipartUpload struct {
+	Key          string    `xml:"Key"`
+	UploadID     string    `xml:"UploadId"`
+	StorageClass string    `xml:"StorageClass"`
+	Initiated    time.Time `xml:"Initiated"`
+}
+
 // CompleteMultipartUpload is the request body for CompleteMultipartUpload
 type CompleteMultipartUpload struct {
 	XMLName xml.Name             `xml:"CompleteMultipartUpload"`
