@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1393,6 +1394,32 @@ func TestAccessLogMiddleware(t *testing.T) {
 			t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
 		}
 	})
+}
+
+func TestAccessLogRedactsPresignedURLs(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	handler := AccessLogMiddleware(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest("GET", "/bucket/key.txt?uploadId=abc&X-Amz-Algorithm=AWS4-HMAC-SHA256"+
+		"&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20261017%2Fus-east-1%2Fs3%2Faws4_request"+
+		"&x-amz-signature=0123456789abcdef&partNumber=2", nil)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	logged := buf.String()
+	for _, secret := range []string{"AKIAIOSFODNN7EXAMPLE", "0123456789abcdef", "AWS4-HMAC-SHA256"} {
+		if strings.Contains(logged, secret) {
+			t.Errorf("access log contains %q: %s", secret, logged)
+		}
+	}
+	want := "/bucket/key.txt?uploadId=abc&X-Amz-Algorithm=REDACTED&X-Amz-Credential=REDACTED&x-amz-signature=REDACTED&partNumber=2"
+	if !strings.Contains(logged, want) {
+		t.Errorf("access log does not contain %q: %s", want, logged)
+	}
 }
 
 func TestGetClientIP(t *testing.T) {
