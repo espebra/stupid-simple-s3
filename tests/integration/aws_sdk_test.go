@@ -280,6 +280,60 @@ func TestAWSSDK_ListMultipartUploads(t *testing.T) {
 	}
 }
 
+// TestAWSSDK_ListParts tests listing the parts of a multipart upload,
+// including pagination with the SDK's paginator
+func TestAWSSDK_ListParts(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	ctx := context.Background()
+	client := ts.AWSClient(ctx)
+	key := "list-parts.bin"
+
+	createResult, err := client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(TestBucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatalf("CreateMultipartUpload failed: %v", err)
+	}
+
+	want := map[int32]string{}
+	for partNum := int32(1); partNum <= 3; partNum++ {
+		result, err := client.UploadPart(ctx, &s3.UploadPartInput{
+			Bucket:     aws.String(TestBucket),
+			Key:        aws.String(key),
+			UploadId:   createResult.UploadId,
+			PartNumber: aws.Int32(partNum),
+			Body:       strings.NewReader("part data"),
+		})
+		if err != nil {
+			t.Fatalf("UploadPart %d failed: %v", partNum, err)
+		}
+		want[partNum] = aws.ToString(result.ETag)
+	}
+
+	got := map[int32]string{}
+	paginator := s3.NewListPartsPaginator(client, &s3.ListPartsInput{
+		Bucket:   aws.String(TestBucket),
+		Key:      aws.String(key),
+		UploadId: createResult.UploadId,
+		MaxParts: aws.Int32(2),
+	})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			t.Fatalf("ListParts failed: %v", err)
+		}
+		for _, p := range page.Parts {
+			got[aws.ToInt32(p.PartNumber)] = aws.ToString(p.ETag)
+		}
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("parts = %v, want %v", got, want)
+	}
+}
+
 // TestAWSSDK_PutGetObject tests basic object upload and download
 func TestAWSSDK_PutGetObject(t *testing.T) {
 	ts := NewTestServer(t)

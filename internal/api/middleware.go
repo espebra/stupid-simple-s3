@@ -347,6 +347,9 @@ func detectOperation(r *http.Request) string {
 		if strings.Count(r.URL.Path, "/") == 1 && query.Has("uploads") {
 			return metrics.OpListMultipartUploads
 		}
+		if strings.Count(r.URL.Path, "/") > 1 && query.Has("uploadId") {
+			return metrics.OpListParts
+		}
 		return metrics.OpGetObject
 
 	case "PUT":

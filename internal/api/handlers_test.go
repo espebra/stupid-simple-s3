@@ -966,6 +966,79 @@ func TestListMultipartUploads(t *testing.T) {
 	})
 }
 
+func TestListParts(t *testing.T) {
+	handlers, store, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	key := "parts.bin"
+	uploadID, err := store.CreateMultipartUpload("test-bucket", key, "", nil)
+	if err != nil {
+		t.Fatalf("CreateMultipartUpload failed: %v", err)
+	}
+	var want []s3.PartMetadata
+	for _, n := range []int{1, 2, 5} {
+		meta, err := store.UploadPart(uploadID, n, strings.NewReader(fmt.Sprintf("part %d", n)))
+		if err != nil {
+			t.Fatalf("UploadPart %d failed: %v", n, err)
+		}
+		want = append(want, *meta)
+	}
+
+	list := func(t *testing.T, key, query string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/test-bucket/"+key+"?uploadId="+uploadID+query, nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", key)
+		w := httptest.NewRecorder()
+		handlers.GetObject(w, req)
+		return w
+	}
+	decode := func(t *testing.T, w *httptest.ResponseRecorder) s3.ListPartsResult {
+		t.Helper()
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusOK, w.Body.String())
+		}
+		var result s3.ListPartsResult
+		if err := xml.NewDecoder(w.Body).Decode(&result); err != nil {
+			t.Fatalf("failed to decode ListPartsResult: %v", err)
+		}
+		return result
+	}
+
+	t.Run("lists parts", func(t *testing.T) {
+		result := decode(t, list(t, key, ""))
+		if result.UploadID != uploadID || result.Key != key || result.IsTruncated {
+			t.Errorf("result = %+v", result)
+		}
+		if len(result.Parts) != len(want) {
+			t.Fatalf("got %d parts, want %d", len(result.Parts), len(want))
+		}
+		for i, p := range result.Parts {
+			if p.PartNumber != want[i].PartNumber || p.ETag != want[i].ETag || p.Size != want[i].Size || p.ChecksumSHA256 != want[i].ChecksumSHA256 {
+				t.Errorf("part %d = %+v, want %+v", i, p, want[i])
+			}
+			if p.LastModified.IsZero() {
+				t.Errorf("part %d has no LastModified", p.PartNumber)
+			}
+		}
+	})
+
+	t.Run("pagination", func(t *testing.T) {
+		first := decode(t, list(t, key, "&max-parts=2"))
+		if !first.IsTruncated || len(first.Parts) != 2 || first.NextPartNumberMarker != 2 {
+			t.Fatalf("first page = %+v, want parts 1 and 2, truncated", first)
+		}
+		second := decode(t, list(t, key, "&max-parts=2&part-number-marker=2"))
+		if second.IsTruncated || len(second.Parts) != 1 || second.Parts[0].PartNumber != 5 {
+			t.Errorf("second page = %+v, want part 5, not truncated", second)
+		}
+	})
+
+	t.Run("upload for another key", func(t *testing.T) {
+		assertErrorCode(t, list(t, "other.bin", ""), http.StatusNotFound, s3.ErrNoSuchUpload)
+	})
+}
+
 func TestListObjectsV2(t *testing.T) {
 	handlers, _, cleanup := setupTestHandlers(t)
 	defer cleanup()
