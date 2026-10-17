@@ -29,8 +29,9 @@ type Storage interface {
 	// PutObject stores an object with the given key
 	PutObject(bucket, key string, contentType string, metadata map[string]string, body io.Reader) (*s3.ObjectMetadata, error)
 
-	// GetObject retrieves an object by key
-	GetObject(bucket, key string) (io.ReadCloser, *s3.ObjectMetadata, error)
+	// GetObject retrieves an object by key. The reader is seekable, so a
+	// range can be read from the same open object that the metadata describes.
+	GetObject(bucket, key string) (io.ReadSeekCloser, *s3.ObjectMetadata, error)
 
 	// GetObjectRange retrieves a range of bytes from an object
 	GetObjectRange(bucket, key string, start, end int64) (io.ReadCloser, *s3.ObjectMetadata, error)

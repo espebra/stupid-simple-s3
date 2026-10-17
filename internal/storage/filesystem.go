@@ -164,14 +164,16 @@ type FilesystemStorage struct {
 	// uploads never block each other.
 	uploadLocks sync.Map // map[string]*sync.RWMutex
 	// commitLocks serialize the short commit step (renames and metadata
-	// writes) of writes to the same object or part. Names are hashed to a
-	// fixed set of mutexes, so no per-name state accumulates. Only one is
+	// writes) of writes to the same object or part, which hold the write
+	// lock. Readers hold the read lock while opening an object's data and
+	// metadata, so they always get both from the same write. Names are hashed
+	// to a fixed set of locks, so no per-name state accumulates. Only one is
 	// ever held at a time, so they cannot deadlock.
-	commitLocks [256]sync.Mutex
+	commitLocks [256]sync.RWMutex
 }
 
-// commitLock returns the mutex that serializes commits for the given name
-func (fs *FilesystemStorage) commitLock(name string) *sync.Mutex {
+// commitLock returns the lock that serializes commits for the given name
+func (fs *FilesystemStorage) commitLock(name string) *sync.RWMutex {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(name))
 	return &fs.commitLocks[h.Sum32()%uint32(len(fs.commitLocks))]
@@ -449,28 +451,35 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 }
 
 // GetObject retrieves an object by key
-func (fs *FilesystemStorage) GetObject(bucket, key string) (io.ReadCloser, *s3.ObjectMetadata, error) {
+func (fs *FilesystemStorage) GetObject(bucket, key string) (io.ReadSeekCloser, *s3.ObjectMetadata, error) {
 	objPath, err := fs.keyToPath(bucket, key)
 	if err != nil {
 		return nil, nil, err
 	}
-	dataPath := filepath.Join(objPath, "data")
+	return fs.openObject(objPath)
+}
 
-	// Get metadata first
-	meta, err := fs.HeadObject(bucket, key)
+// openObject opens an object's data file and reads its metadata under the
+// object's commit lock, so that both come from the same write even when the
+// object is being overwritten. The lock is only held while opening; the
+// returned file keeps the data of that write while it is read.
+func (fs *FilesystemStorage) openObject(objPath string) (*os.File, *s3.ObjectMetadata, error) {
+	commit := fs.commitLock(objPath)
+	commit.RLock()
+	defer commit.RUnlock()
+
+	meta, err := readObjectMetadata(filepath.Join(objPath, "meta.json"))
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// Open data file
-	file, err := os.Open(dataPath)
+	file, err := os.Open(filepath.Join(objPath, "data"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil, ErrObjectNotFound
 		}
 		return nil, nil, fmt.Errorf("opening object data: %w", err)
 	}
-
 	return file, meta, nil
 }
 
@@ -480,8 +489,11 @@ func (fs *FilesystemStorage) HeadObject(bucket, key string) (*s3.ObjectMetadata,
 	if err != nil {
 		return nil, err
 	}
-	metaPath := filepath.Join(objPath, "meta.json")
+	return readObjectMetadata(filepath.Join(objPath, "meta.json"))
+}
 
+// readObjectMetadata reads an object's meta.json
+func readObjectMetadata(metaPath string) (*s3.ObjectMetadata, error) {
 	metaFile, err := os.Open(metaPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -571,16 +583,14 @@ func (fs *FilesystemStorage) GetObjectRange(bucket, key string, start, end int64
 	if err != nil {
 		return nil, nil, err
 	}
-	dataPath := filepath.Join(objPath, "data")
-
-	// Get metadata first
-	meta, err := fs.HeadObject(bucket, key)
+	file, meta, err := fs.openObject(objPath)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// Handle empty files - no valid range exists
 	if meta.Size == 0 {
+		_ = file.Close()
 		return nil, nil, fmt.Errorf("invalid range: object is empty")
 	}
 
@@ -592,16 +602,8 @@ func (fs *FilesystemStorage) GetObjectRange(bucket, key string, start, end int64
 		end = meta.Size - 1
 	}
 	if start > end {
+		_ = file.Close()
 		return nil, nil, fmt.Errorf("invalid range: start > end")
-	}
-
-	// Open data file
-	file, err := os.Open(dataPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil, ErrObjectNotFound
-		}
-		return nil, nil, fmt.Errorf("opening object data: %w", err)
 	}
 
 	// Seek to start position
