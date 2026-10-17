@@ -86,6 +86,8 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 	mu.RLock()
 	defer mu.RUnlock()
 
+	// Safe to use in a path: validateUploadID above only accepts UUIDs, which
+	// cannot contain a path separator or "..".
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
 	// Check upload exists
@@ -94,6 +96,8 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 	}
 
 	// Write part to file
+	// The part number is an int, so the file name cannot contain a path
+	// separator or "..".
 	partFilename := fmt.Sprintf("part.%05d", partNumber)
 	partPath := filepath.Join(uploadPath, partFilename)
 	tmpPath := partPath + ".tmp"
@@ -158,6 +162,8 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	mu.Lock()
 	defer mu.Unlock()
 
+	// Safe to use in a path: validateUploadID above only accepts UUIDs, which
+	// cannot contain a path separator or "..".
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
 	// Get upload metadata (internal call, lock already held)
@@ -179,6 +185,8 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	compositeHash := sha256.New()
 
 	for _, part := range parts {
+		// The part number is an int, so the file name cannot contain a path
+		// separator or "..".
 		partFilename := fmt.Sprintf("part.%05d", part.PartNumber)
 		partPath := filepath.Join(uploadPath, partFilename)
 		partMetaPath := filepath.Join(uploadPath, partFilename+".meta")
@@ -230,6 +238,7 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	}
 
 	dataPath := filepath.Join(objPath, "data")
+	// uploadID is a validated UUID, so the temp file stays next to dataPath.
 	tmpPath := dataPath + ".tmp." + uploadID
 
 	// Concatenate all parts. Copying file to file lets the kernel use
@@ -241,6 +250,8 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	}
 
 	for _, part := range parts {
+		// The part number is an int, so the file name cannot contain a path
+		// separator or "..".
 		partFilename := fmt.Sprintf("part.%05d", part.PartNumber)
 		partPath := filepath.Join(uploadPath, partFilename)
 
@@ -285,6 +296,7 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 
 	// Write metadata atomically using temp file and rename
 	metaPath := filepath.Join(objPath, "meta.json")
+	// uploadID is a validated UUID, so the temp file stays next to metaPath.
 	metaTmpPath := metaPath + ".tmp." + uploadID
 	metaFile, err := os.Create(metaTmpPath)
 	if err != nil {
@@ -323,6 +335,8 @@ func (fs *FilesystemStorage) AbortMultipartUpload(uploadID string) error {
 	mu.Lock()
 	defer mu.Unlock()
 
+	// Safe to use in a path: validateUploadID above only accepts UUIDs, which
+	// cannot contain a path separator or "..".
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
 	if _, err := os.Stat(uploadPath); os.IsNotExist(err) {
@@ -355,6 +369,8 @@ func (fs *FilesystemStorage) getMultipartUploadInternal(uploadID string) (*s3.Mu
 		return nil, ErrUploadNotFound
 	}
 
+	// Safe to use in a path: validateUploadID above only accepts UUIDs, which
+	// cannot contain a path separator or "..".
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 	metaPath := filepath.Join(uploadPath, "meta.json")
 
@@ -384,6 +400,8 @@ func (fs *FilesystemStorage) ListParts(uploadID string) ([]s3.PartMetadata, erro
 	mu.RLock()
 	defer mu.RUnlock()
 
+	// Safe to use in a path: validateUploadID above only accepts UUIDs, which
+	// cannot contain a path separator or "..".
 	uploadPath := filepath.Join(fs.multipartPath, uploadID)
 
 	entries, err := os.ReadDir(uploadPath)
@@ -577,6 +595,10 @@ func partDigest(partMeta *s3.PartMetadata, partPath string) ([]byte, error) {
 	if partMeta.ChecksumSHA256 != "" {
 		return base64.StdEncoding.DecodeString(partMeta.ChecksumSHA256)
 	}
+	// partPath is safe to open even though it is built from request data:
+	// CompleteMultipartUpload rejects any upload ID that is not a UUID
+	// (validateUploadID), and the part number is an int formatted as
+	// "part.%05d", so neither can contain a path separator or "..".
 	f, err := os.Open(partPath)
 	if err != nil {
 		return nil, err
