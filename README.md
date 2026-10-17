@@ -183,6 +183,8 @@ Presigned URL parameters:
 - Maximum expiry time: 7 days (604800 seconds)
 - Supported operations: GET (download), PUT (upload), HEAD, DELETE
 
+The access log replaces the values of all `X-Amz-*` query parameters with `REDACTED`, so presigned URLs found in the logs cannot be used.
+
 ## Checksums and ETags
 
 Uploads are verified when the client sends a SHA-256 checksum (`x-amz-checksum-sha256`), either as a header or as an aws-chunked trailer. An upload whose data does not match is rejected with `400 BadDigest` and is not stored. Checksums using other algorithms are accepted but not verified. AWS SDKs send CRC32 by default, so clients must ask for SHA-256 to get their uploads verified:
@@ -220,6 +222,7 @@ ETags are derived from the same digests: `"sha256-<hex>"` for objects and parts,
 | CreateBucket | PUT | `/{bucket}` |
 | DeleteBucket | DELETE | `/{bucket}` |
 | HeadBucket | HEAD | `/{bucket}` |
+| GetBucketLocation | GET | `/{bucket}?location` |
 | ListObjectsV2 | GET | `/{bucket}?list-type=2` |
 | PutObject | PUT | `/{bucket}/{key}` |
 | CopyObject | PUT | `/{bucket}/{key}` with `x-amz-copy-source` header |
@@ -232,6 +235,14 @@ ETags are derived from the same digests: `"sha256-<hex>"` for objects and parts,
 | UploadPart | PUT | `/{bucket}/{key}?partNumber=N&uploadId=X` |
 | CompleteMultipartUpload | POST | `/{bucket}/{key}?uploadId=X` |
 | AbortMultipartUpload | DELETE | `/{bucket}/{key}?uploadId=X` |
+| ListMultipartUploads | GET | `/{bucket}?uploads` |
+| ListParts | GET | `/{bucket}/{key}?uploadId=X` |
+
+Notes:
+- GetBucketLocation returns an empty location constraint, which S3 clients read as `us-east-1`. The service has no regions.
+- As in S3, every part of a multipart upload except the last must be at least 5 MiB. CompleteMultipartUpload fails with `EntityTooSmall` otherwise.
+- ListMultipartUploads supports `prefix`, `key-marker`, `upload-id-marker` and `max-uploads`. `delimiter` is ignored.
+- ListParts supports `part-number-marker` and `max-parts`.
 
 ## Health check endpoints
 
