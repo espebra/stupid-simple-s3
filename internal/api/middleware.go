@@ -339,16 +339,17 @@ func isBucketPath(path string) bool {
 // detectOperation determines the S3 operation from the request
 func detectOperation(r *http.Request) string {
 	query := r.URL.Query()
+	bucketLevel := isBucketPath(r.URL.Path)
 
 	switch r.Method {
 	case "HEAD":
-		if strings.Count(r.URL.Path, "/") > 1 {
-			return metrics.OpHeadObject
+		if bucketLevel {
+			return metrics.OpHeadBucket
 		}
-		return metrics.OpHeadBucket
+		return metrics.OpHeadObject
 
 	case "GET":
-		if isBucketPath(r.URL.Path) {
+		if bucketLevel {
 			if query.Has("location") {
 				return metrics.OpGetBucketLocation
 			}
@@ -363,18 +364,33 @@ func detectOperation(r *http.Request) string {
 		return metrics.OpGetObject
 
 	case "PUT":
+		if bucketLevel {
+			return metrics.OpCreateBucket
+		}
 		if query.Has("uploadId") && query.Has("partNumber") {
 			return metrics.OpUploadPart
+		}
+		if r.Header.Get("X-Amz-Copy-Source") != "" {
+			return metrics.OpCopyObject
 		}
 		return metrics.OpPutObject
 
 	case "DELETE":
+		if bucketLevel {
+			return metrics.OpDeleteBucket
+		}
 		if query.Has("uploadId") {
 			return metrics.OpAbortMultipartUpload
 		}
 		return metrics.OpDeleteObject
 
 	case "POST":
+		if bucketLevel {
+			if query.Has("delete") {
+				return metrics.OpDeleteObjects
+			}
+			return metrics.OpUnknown
+		}
 		if query.Has("uploads") {
 			return metrics.OpCreateMultipartUpload
 		}
