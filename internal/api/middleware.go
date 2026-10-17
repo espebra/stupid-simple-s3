@@ -329,6 +329,13 @@ func getOperationFromContext(r *http.Request) string {
 	return detectOperation(r)
 }
 
+// isBucketPath reports whether a request path addresses a bucket rather than
+// an object. GetObject treats a trailing slash ("/bucket/") as the bucket.
+func isBucketPath(path string) bool {
+	_, key, _ := strings.Cut(strings.TrimPrefix(path, "/"), "/")
+	return key == ""
+}
+
 // detectOperation determines the S3 operation from the request
 func detectOperation(r *http.Request) string {
 	query := r.URL.Query()
@@ -341,13 +348,16 @@ func detectOperation(r *http.Request) string {
 		return metrics.OpHeadBucket
 
 	case "GET":
-		if strings.Count(r.URL.Path, "/") == 1 && query.Has("location") {
-			return metrics.OpGetBucketLocation
+		if isBucketPath(r.URL.Path) {
+			if query.Has("location") {
+				return metrics.OpGetBucketLocation
+			}
+			if query.Has("uploads") {
+				return metrics.OpListMultipartUploads
+			}
+			return metrics.OpListObjects
 		}
-		if strings.Count(r.URL.Path, "/") == 1 && query.Has("uploads") {
-			return metrics.OpListMultipartUploads
-		}
-		if strings.Count(r.URL.Path, "/") > 1 && query.Has("uploadId") {
+		if query.Has("uploadId") {
 			return metrics.OpListParts
 		}
 		return metrics.OpGetObject
