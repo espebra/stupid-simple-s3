@@ -1252,7 +1252,7 @@ func (h *Handlers) ListObjectsV2(w http.ResponseWriter, r *http.Request) {
 		Prefix:                opts.Prefix,
 		Delimiter:             opts.Delimiter,
 		MaxKeys:               maxKeys,
-		KeyCount:              len(objects),
+		KeyCount:              len(objects) + len(commonPrefixes),
 		IsTruncated:           result.IsTruncated,
 		StartAfter:            opts.StartAfter,
 		ContinuationToken:     opts.ContinuationToken,

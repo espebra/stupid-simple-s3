@@ -640,6 +640,21 @@ type objectEntry struct {
 	metaPath string
 }
 
+// listTokenPrefixMarker starts the continuation token of a page that ended
+// with a common prefix. Keys cannot contain a NUL byte (ValidateKey), so it
+// cannot be confused with the token of a page that ended with an object.
+const listTokenPrefixMarker = "\x00"
+
+// listToken returns the continuation token for a listing page that ended
+// with the given key or, if isPrefix, common prefix. The next page starts
+// after the key, or after every key under the prefix.
+func listToken(keyOrPrefix string, isPrefix bool) string {
+	if isPrefix {
+		keyOrPrefix = listTokenPrefixMarker + keyOrPrefix
+	}
+	return base64.URLEncoding.EncodeToString([]byte(keyOrPrefix))
+}
+
 // ListObjects lists objects with optional prefix, delimiter, and pagination
 func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions) (*ListObjectsResult, error) {
 	if err := ValidateBucketName(bucket); err != nil {
@@ -705,20 +720,31 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 	result := &ListObjectsResult{}
 	commonPrefixSet := make(map[string]bool)
 	startKey := opts.StartAfter
+	skipPrefix := ""
 	if opts.ContinuationToken != "" {
-		// Decode continuation token (it's base64 encoded key)
+		// Decode continuation token (see listToken)
 		decoded, err := base64.URLEncoding.DecodeString(opts.ContinuationToken)
 		if err == nil {
 			startKey = string(decoded)
+			if p, ok := strings.CutPrefix(startKey, listTokenPrefixMarker); ok {
+				startKey, skipPrefix = p, p
+			}
 		}
 	}
 
-	// resultEntries tracks which entries need full metadata loaded (pass 2)
+	// resultEntries tracks which entries need full metadata loaded (pass 2).
+	// Each object and each common prefix counts as one entry against MaxKeys,
+	// as in S3. lastToken is the continuation token for the last entry.
 	var resultEntries []objectEntry
 	count := 0
+	lastToken := ""
 	for _, entry := range entries {
-		// Skip objects before startKey
+		// Skip objects up to startKey, and all keys under a common prefix
+		// that ended the previous page
 		if startKey != "" && entry.key <= startKey {
+			continue
+		}
+		if skipPrefix != "" && strings.HasPrefix(entry.key, skipPrefix) {
 			continue
 		}
 
@@ -735,10 +761,18 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 			if delimIdx >= 0 {
 				// This is a common prefix — no full metadata needed
 				commonPrefix := opts.Prefix + afterPrefix[:delimIdx+len(opts.Delimiter)]
-				if !commonPrefixSet[commonPrefix] {
-					commonPrefixSet[commonPrefix] = true
-					result.CommonPrefixes = append(result.CommonPrefixes, commonPrefix)
+				if commonPrefixSet[commonPrefix] {
+					continue
 				}
+				if count >= opts.MaxKeys {
+					result.IsTruncated = true
+					result.NextContinuationToken = lastToken
+					break
+				}
+				commonPrefixSet[commonPrefix] = true
+				result.CommonPrefixes = append(result.CommonPrefixes, commonPrefix)
+				count++
+				lastToken = listToken(commonPrefix, true)
 				continue
 			}
 		}
@@ -746,14 +780,13 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 		// Check if we've reached the limit
 		if count >= opts.MaxKeys {
 			result.IsTruncated = true
-			if len(resultEntries) > 0 {
-				result.NextContinuationToken = base64.URLEncoding.EncodeToString([]byte(resultEntries[len(resultEntries)-1].key))
-			}
+			result.NextContinuationToken = lastToken
 			break
 		}
 
 		resultEntries = append(resultEntries, entry)
 		count++
+		lastToken = listToken(entry.key, false)
 	}
 
 	// Pass 2: Load full metadata only for the result page entries.

@@ -1099,9 +1099,10 @@ func TestListObjectsV2(t *testing.T) {
 		var result s3.ListBucketResultV2
 		_ = xml.NewDecoder(w.Body).Decode(&result)
 
-		// Should have 1 root object and 2 common prefixes (a/, b/)
-		if result.KeyCount != 1 {
-			t.Errorf("KeyCount = %d, want 1", result.KeyCount)
+		// Should have 1 root object and 2 common prefixes (a/, b/). As in
+		// S3, KeyCount counts both.
+		if result.KeyCount != 3 {
+			t.Errorf("KeyCount = %d, want 3", result.KeyCount)
 		}
 		if len(result.CommonPrefixes) != 2 {
 			t.Errorf("CommonPrefixes count = %d, want 2", len(result.CommonPrefixes))

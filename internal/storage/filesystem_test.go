@@ -3,12 +3,15 @@ package storage
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -769,6 +772,57 @@ func TestDeleteBucketNotEmpty(t *testing.T) {
 	if exists, _ := storage.ObjectExists(testBucket, "key"); !exists {
 		t.Error("object was removed by a failed DeleteBucket")
 	}
+}
+
+func TestListObjectsPaginationWithCommonPrefixes(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	for _, key := range []string{"a/1", "a/2", "b/1", "c", "d/1", "d/2", "e", "f/1"} {
+		if _, err := storage.PutObject(testBucket, key, "text/plain", nil, bytes.NewReader([]byte("x"))); err != nil {
+			t.Fatalf("PutObject(%q) failed: %v", key, err)
+		}
+	}
+
+	// Pages of two entries, where each object and common prefix counts as one
+	want := [][]string{{"a/", "b/"}, {"c", "d/"}, {"e", "f/"}}
+	token := ""
+	for page := 0; ; page++ {
+		result, err := storage.ListObjects(testBucket, ListObjectsOptions{Delimiter: "/", MaxKeys: 2, ContinuationToken: token})
+		if err != nil {
+			t.Fatalf("page %d: ListObjects failed: %v", page, err)
+		}
+		var got []string
+		for _, obj := range result.Objects {
+			got = append(got, obj.Key)
+		}
+		got = append(got, result.CommonPrefixes...)
+		sort.Strings(got)
+		if page >= len(want) || !slices.Equal(got, want[page]) {
+			t.Fatalf("page %d = %v, want %v", page, got, want)
+		}
+		if result.IsTruncated != (page < len(want)-1) {
+			t.Fatalf("page %d: IsTruncated = %v", page, result.IsTruncated)
+		}
+		if !result.IsTruncated {
+			break
+		}
+		// A page of only common prefixes must still continue
+		if result.NextContinuationToken == "" {
+			t.Fatalf("page %d is truncated but has no continuation token", page)
+		}
+		token = result.NextContinuationToken
+	}
+
+	t.Run("token of a page ending with an object is unchanged", func(t *testing.T) {
+		result, err := storage.ListObjects(testBucket, ListObjectsOptions{MaxKeys: 1})
+		if err != nil {
+			t.Fatalf("ListObjects failed: %v", err)
+		}
+		if want := base64.URLEncoding.EncodeToString([]byte("a/1")); result.NextContinuationToken != want {
+			t.Errorf("NextContinuationToken = %q, want %q", result.NextContinuationToken, want)
+		}
+	})
 }
 
 func TestUploadDirStaysInMultipartPath(t *testing.T) {
