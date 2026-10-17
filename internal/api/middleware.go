@@ -115,6 +115,16 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// ReadFrom lets io.Copy hand the copy to the wrapped writer, so that the
+// HTTP server can send object data from the file to the socket with
+// sendfile instead of copying it through user space. Without it, the
+// wrapper hides the server's own ReadFrom.
+func (rw *responseWriter) ReadFrom(src io.Reader) (int64, error) {
+	n, err := io.Copy(rw.ResponseWriter, src)
+	rw.bytesWritten += n
+	return n, err
+}
+
 // countingReader wraps io.ReadCloser to count bytes read
 type countingReader struct {
 	io.ReadCloser
