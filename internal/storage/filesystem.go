@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"os"
 	"path/filepath"
@@ -152,6 +153,18 @@ type FilesystemStorage struct {
 	// uploadLocks holds a per-upload RWMutex so that operations on different
 	// uploads never block each other.
 	uploadLocks sync.Map // map[string]*sync.RWMutex
+	// commitLocks serialize the short commit step (renames and metadata
+	// writes) of writes to the same object or part. Names are hashed to a
+	// fixed set of mutexes, so no per-name state accumulates. Only one is
+	// ever held at a time, so they cannot deadlock.
+	commitLocks [256]sync.Mutex
+}
+
+// commitLock returns the mutex that serializes commits for the given name
+func (fs *FilesystemStorage) commitLock(name string) *sync.Mutex {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(name))
+	return &fs.commitLocks[h.Sum32()%uint32(len(fs.commitLocks))]
 }
 
 // NewFilesystemStorage creates a new filesystem-backed storage

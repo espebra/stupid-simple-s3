@@ -100,7 +100,10 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 	// separator or "..".
 	partFilename := fmt.Sprintf("part.%05d", partNumber)
 	partPath := filepath.Join(uploadPath, partFilename)
-	tmpPath := partPath + ".tmp"
+	// A unique temp file per request keeps concurrent uploads of the same
+	// part from writing into each other's data.
+	tmpID := uuid.New().String()
+	tmpPath := partPath + ".tmp." + tmpID
 
 	tmpFile, err := os.Create(tmpPath)
 	if err != nil {
@@ -123,11 +126,6 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 		return nil, fmt.Errorf("closing part file: %w", err)
 	}
 
-	if err := os.Rename(tmpPath, partPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return nil, fmt.Errorf("renaming part file: %w", err)
-	}
-
 	// Save part metadata
 	sum := hash.Sum(nil)
 	partMeta := &s3.PartMetadata{
@@ -136,16 +134,27 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 		Size:           size,
 		ChecksumSHA256: EncodeChecksum(sum),
 	}
-
 	partMetaPath := filepath.Join(uploadPath, partFilename+".meta")
-	partMetaFile, err := os.Create(partMetaPath)
-	if err != nil {
-		return nil, fmt.Errorf("creating part metadata: %w", err)
-	}
-	defer func() { _ = partMetaFile.Close() }()
-
-	if err := json.NewEncoder(partMetaFile).Encode(partMeta); err != nil {
+	partMetaTmpPath := partMetaPath + ".tmp." + tmpID
+	if err := writeJSONFile(partMetaTmpPath, partMeta); err != nil {
+		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("writing part metadata: %w", err)
+	}
+
+	// Commit the data and metadata together, so that concurrent uploads of
+	// the same part cannot leave the data of one and the metadata of another
+	commit := fs.commitLock(uploadPath + "/" + partFilename)
+	commit.Lock()
+	defer commit.Unlock()
+
+	if err := os.Rename(tmpPath, partPath); err != nil {
+		_ = os.Remove(tmpPath)
+		_ = os.Remove(partMetaTmpPath)
+		return nil, fmt.Errorf("renaming part file: %w", err)
+	}
+	if err := os.Rename(partMetaTmpPath, partMetaPath); err != nil {
+		_ = os.Remove(partMetaTmpPath)
+		return nil, fmt.Errorf("renaming part metadata: %w", err)
 	}
 
 	return partMeta, nil
@@ -609,4 +618,22 @@ func partDigest(partMeta *s3.PartMetadata, partPath string) ([]byte, error) {
 		return nil, err
 	}
 	return hash.Sum(nil), nil
+}
+
+// writeJSONFile writes v as JSON to a new file at path
+func writeJSONFile(path string, v any) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	if err := json.NewEncoder(f).Encode(v); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return nil
 }
