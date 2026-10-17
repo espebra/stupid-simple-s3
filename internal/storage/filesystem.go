@@ -3,12 +3,10 @@ package storage
 import (
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -55,23 +53,22 @@ var ErrInvalidPartOrder = errors.New("parts must be in ascending order")
 // ErrBadDigest is returned when uploaded data does not match the checksum sent by the client
 var ErrBadDigest = errors.New("checksum mismatch")
 
-// EncodeCRC32 returns a CRC32 value in the base64 form used by the
-// x-amz-checksum-crc32 header.
-func EncodeCRC32(sum uint32) string {
-	var b [4]byte
-	binary.BigEndian.PutUint32(b[:], sum)
-	return base64.StdEncoding.EncodeToString(b[:])
+// EncodeChecksum returns a digest in the base64 form used by the
+// x-amz-checksum-sha256 header.
+func EncodeChecksum(sum []byte) string {
+	return base64.StdEncoding.EncodeToString(sum)
 }
 
-// makeETag builds a quoted ETag from the CRC32, size and write time of the
-// data. The write time keeps ETags unique when two versions share a CRC32.
-// The format is deliberately not 32 hex characters, so clients do not mistake
-// it for an MD5 digest. A non-zero parts count adds the S3 multipart "-N" suffix.
-func makeETag(sum uint32, size int64, t time.Time, parts int) string {
+// makeETag builds a quoted ETag from the SHA-256 of the data. SHA-256 is
+// collision resistant, so the ETag only changes when the content does.
+// The "sha256-" prefix keeps a "-" in every ETag: clients such as AWS SDK for
+// Java v1 treat an ETag without one as an MD5 digest and fail to verify it.
+// A non-zero parts count adds the S3 multipart "-N" suffix.
+func makeETag(sum []byte, parts int) string {
 	if parts > 0 {
-		return fmt.Sprintf("\"%08x-%d-%d-%d\"", sum, size, t.UnixNano(), parts)
+		return fmt.Sprintf("\"sha256-%s-%d\"", hex.EncodeToString(sum), parts)
 	}
-	return fmt.Sprintf("\"%08x-%d-%d\"", sum, size, t.UnixNano())
+	return fmt.Sprintf("\"sha256-%s\"", hex.EncodeToString(sum))
 }
 
 // ValidateKey checks that an object key is safe and doesn't contain path traversal sequences.
@@ -341,8 +338,8 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 		return nil, fmt.Errorf("creating temp file: %w", err)
 	}
 
-	// Calculate CRC32 while writing
-	hash := crc32.NewIEEE()
+	// Calculate SHA-256 while writing
+	hash := sha256.New()
 	writer := io.MultiWriter(tmpFile, hash)
 
 	size, err := io.Copy(writer, body)
@@ -366,14 +363,15 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 	// Create metadata
 	now := time.Now().UTC()
 
+	sum := hash.Sum(nil)
 	objMeta := &s3.ObjectMetadata{
-		Key:           key,
-		Size:          size,
-		ContentType:   contentType,
-		ETag:          makeETag(hash.Sum32(), size, now, 0),
-		LastModified:  now,
-		UserMetadata:  metadata,
-		ChecksumCRC32: EncodeCRC32(hash.Sum32()),
+		Key:            key,
+		Size:           size,
+		ContentType:    contentType,
+		ETag:           makeETag(sum, 0),
+		LastModified:   now,
+		UserMetadata:   metadata,
+		ChecksumSHA256: EncodeChecksum(sum),
 	}
 
 	// Write metadata atomically using temp file and rename

@@ -2,7 +2,9 @@ package storage
 
 import (
 	"bytes"
-	"hash/crc32"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -674,19 +676,66 @@ func TestMultipartUpload(t *testing.T) {
 		t.Errorf("ETag should indicate 3 parts: %q", objMeta.ETag)
 	}
 
-	// Checksum covers the full object, not the parts
-	if want := EncodeCRC32(crc32.ChecksumIEEE(expectedContent)); objMeta.ChecksumCRC32 != want {
-		t.Errorf("ChecksumCRC32 = %q, want %q", objMeta.ChecksumCRC32, want)
+	// Composite checksum: SHA-256 of the concatenated part digests
+	if want := compositeChecksum(part1Content, part2Content, part3Content); objMeta.ChecksumSHA256 != want {
+		t.Errorf("ChecksumSHA256 = %q, want %q", objMeta.ChecksumSHA256, want)
 	}
-	if want := EncodeCRC32(crc32.ChecksumIEEE(part1Content)); part1Meta.ChecksumCRC32 != want {
-		t.Errorf("part 1 ChecksumCRC32 = %q, want %q", part1Meta.ChecksumCRC32, want)
+	if want := sha256Checksum(part1Content); part1Meta.ChecksumSHA256 != want {
+		t.Errorf("part 1 ChecksumSHA256 = %q, want %q", part1Meta.ChecksumSHA256, want)
 	}
 }
 
-func TestEncodeCRC32(t *testing.T) {
-	// Standard CRC-32 check value for "123456789" is 0xcbf43926
-	if got := EncodeCRC32(crc32.ChecksumIEEE([]byte("123456789"))); got != "y/Q5Jg==" {
-		t.Errorf("EncodeCRC32 = %q, want %q", got, "y/Q5Jg==")
+func sha256Checksum(data []byte) string {
+	sum := sha256.Sum256(data)
+	return EncodeChecksum(sum[:])
+}
+
+func compositeChecksum(parts ...[]byte) string {
+	hash := sha256.New()
+	for _, p := range parts {
+		sum := sha256.Sum256(p)
+		hash.Write(sum[:])
+	}
+	return fmt.Sprintf("%s-%d", EncodeChecksum(hash.Sum(nil)), len(parts))
+}
+
+// Parts uploaded before SHA-256 checksums were introduced have no digest
+// stored; completing the upload must hash their data instead.
+func TestCompleteMultipartUploadLegacyPart(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	uploadID, err := storage.CreateMultipartUpload(testBucket, "legacy.bin", "application/octet-stream", nil)
+	if err != nil {
+		t.Fatalf("CreateMultipartUpload failed: %v", err)
+	}
+	part1Content := []byte("first part")
+	part2Content := []byte("second part")
+	part1Meta, err := storage.UploadPart(uploadID, 1, bytes.NewReader(part1Content))
+	if err != nil {
+		t.Fatalf("UploadPart 1 failed: %v", err)
+	}
+	part2Meta, err := storage.UploadPart(uploadID, 2, bytes.NewReader(part2Content))
+	if err != nil {
+		t.Fatalf("UploadPart 2 failed: %v", err)
+	}
+
+	// Rewrite part 1's metadata as an older version stored it
+	legacy := s3.PartMetadata{PartNumber: 1, ETag: "\"legacy-etag\"", Size: part1Meta.Size}
+	data, _ := json.Marshal(legacy)
+	if err := os.WriteFile(filepath.Join(storage.multipartPath, uploadID, "part.00001.meta"), data, 0600); err != nil {
+		t.Fatalf("writing legacy part metadata: %v", err)
+	}
+
+	objMeta, err := storage.CompleteMultipartUpload(uploadID, []s3.CompletedPartInput{
+		{PartNumber: 1, ETag: legacy.ETag},
+		{PartNumber: 2, ETag: part2Meta.ETag},
+	})
+	if err != nil {
+		t.Fatalf("CompleteMultipartUpload failed: %v", err)
+	}
+	if want := compositeChecksum(part1Content, part2Content); objMeta.ChecksumSHA256 != want {
+		t.Errorf("ChecksumSHA256 = %q, want %q", objMeta.ChecksumSHA256, want)
 	}
 }
 
@@ -703,27 +752,34 @@ func TestObjectChecksumAndETag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PutObject failed: %v", err)
 	}
-
-	if want := EncodeCRC32(crc32.ChecksumIEEE(content)); meta1.ChecksumCRC32 != want {
-		t.Errorf("ChecksumCRC32 = %q, want %q", meta1.ChecksumCRC32, want)
+	meta3, err := storage.PutObject(testBucket, "etag.txt", "text/plain", nil, bytes.NewReader([]byte("other content")))
+	if err != nil {
+		t.Fatalf("PutObject failed: %v", err)
 	}
 
-	// Rewriting identical content must still change the ETag
-	if meta1.ETag == meta2.ETag {
-		t.Errorf("ETag should change on every write, got %q twice", meta1.ETag)
+	if want := sha256Checksum(content); meta1.ChecksumSHA256 != want {
+		t.Errorf("ChecksumSHA256 = %q, want %q", meta1.ChecksumSHA256, want)
 	}
 
-	// Must not look like an MD5 (32 hex characters), which clients would try to verify
-	if unquoted := strings.Trim(meta1.ETag, "\""); len(unquoted) == 32 {
-		t.Errorf("ETag should not be 32 characters: %q", meta1.ETag)
+	sum := sha256.Sum256(content)
+	if want := fmt.Sprintf("\"sha256-%x\"", sum); meta1.ETag != want {
+		t.Errorf("ETag = %q, want %q", meta1.ETag, want)
+	}
+
+	// The ETag depends only on the content
+	if meta1.ETag != meta2.ETag {
+		t.Errorf("rewriting identical content changed the ETag: %q, %q", meta1.ETag, meta2.ETag)
+	}
+	if meta1.ETag == meta3.ETag {
+		t.Errorf("different content should have a different ETag, got %q twice", meta1.ETag)
 	}
 
 	headMeta, err := storage.HeadObject(testBucket, "etag.txt")
 	if err != nil {
 		t.Fatalf("HeadObject failed: %v", err)
 	}
-	if headMeta.ChecksumCRC32 != meta2.ChecksumCRC32 {
-		t.Errorf("stored ChecksumCRC32 = %q, want %q", headMeta.ChecksumCRC32, meta2.ChecksumCRC32)
+	if headMeta.ChecksumSHA256 != meta3.ChecksumSHA256 {
+		t.Errorf("stored ChecksumSHA256 = %q, want %q", headMeta.ChecksumSHA256, meta3.ChecksumSHA256)
 	}
 }
 

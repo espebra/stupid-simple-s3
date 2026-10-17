@@ -1,10 +1,11 @@
 package storage
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -102,8 +103,8 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 		return nil, fmt.Errorf("creating part file: %w", err)
 	}
 
-	// Calculate CRC32 while writing
-	hash := crc32.NewIEEE()
+	// Calculate SHA-256 while writing
+	hash := sha256.New()
 	writer := io.MultiWriter(tmpFile, hash)
 
 	size, err := io.Copy(writer, body)
@@ -124,11 +125,12 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 	}
 
 	// Save part metadata
+	sum := hash.Sum(nil)
 	partMeta := &s3.PartMetadata{
-		PartNumber:    partNumber,
-		ETag:          makeETag(hash.Sum32(), size, time.Now(), 0),
-		Size:          size,
-		ChecksumCRC32: EncodeCRC32(hash.Sum32()),
+		PartNumber:     partNumber,
+		ETag:           makeETag(sum, 0),
+		Size:           size,
+		ChecksumSHA256: EncodeChecksum(sum),
 	}
 
 	partMetaPath := filepath.Join(uploadPath, partFilename+".meta")
@@ -171,8 +173,10 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 		}
 	}
 
-	// Verify all parts exist and ETags match
+	// Verify all parts exist and ETags match, collecting the part digests for
+	// the composite checksum
 	var totalSize int64
+	compositeHash := sha256.New()
 
 	for _, part := range parts {
 		partFilename := fmt.Sprintf("part.%05d", part.PartNumber)
@@ -208,6 +212,11 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 			return nil, fmt.Errorf("part %d ETag mismatch: expected %s, got %s", part.PartNumber, expectedETag, actualETag)
 		}
 
+		partSum, err := partDigest(&partMeta, partPath)
+		if err != nil {
+			return nil, fmt.Errorf("part %d checksum: %w", part.PartNumber, err)
+		}
+		compositeHash.Write(partSum)
 		totalSize += partMeta.Size
 	}
 
@@ -223,13 +232,13 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	dataPath := filepath.Join(objPath, "data")
 	tmpPath := dataPath + ".tmp." + uploadID
 
-	// Concatenate all parts, calculating the full-object CRC32 while copying
+	// Concatenate all parts. Copying file to file lets the kernel use
+	// copy_file_range, which avoids user-space copies and can share extents
+	// on filesystems that support reflinks.
 	outFile, err := os.Create(tmpPath)
 	if err != nil {
 		return nil, fmt.Errorf("creating output file: %w", err)
 	}
-	hash := crc32.NewIEEE()
-	writer := io.MultiWriter(outFile, hash)
 
 	for _, part := range parts {
 		partFilename := fmt.Sprintf("part.%05d", part.PartNumber)
@@ -242,7 +251,7 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 			return nil, fmt.Errorf("opening part %d: %w", part.PartNumber, err)
 		}
 
-		_, err = io.Copy(writer, partFile)
+		_, err = io.Copy(outFile, partFile)
 		_ = partFile.Close()
 		if err != nil {
 			_ = outFile.Close()
@@ -263,14 +272,15 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 
 	// Create object metadata
 	now := time.Now().UTC()
+	compositeSum := compositeHash.Sum(nil)
 	objMeta := &s3.ObjectMetadata{
-		Key:           uploadMeta.Key,
-		Size:          totalSize,
-		ContentType:   uploadMeta.ContentType,
-		ETag:          makeETag(hash.Sum32(), totalSize, now, len(parts)),
-		LastModified:  now,
-		UserMetadata:  uploadMeta.UserMetadata,
-		ChecksumCRC32: EncodeCRC32(hash.Sum32()),
+		Key:            uploadMeta.Key,
+		Size:           totalSize,
+		ContentType:    uploadMeta.ContentType,
+		ETag:           makeETag(compositeSum, len(parts)),
+		LastModified:   now,
+		UserMetadata:   uploadMeta.UserMetadata,
+		ChecksumSHA256: fmt.Sprintf("%s-%d", EncodeChecksum(compositeSum), len(parts)),
 	}
 
 	// Write metadata atomically using temp file and rename
@@ -559,4 +569,22 @@ func (fs *FilesystemStorage) CleanupStaleTempFiles(maxAge time.Duration) (int, e
 		return cleaned, fmt.Errorf("walking buckets directory: %w", err)
 	}
 	return cleaned, nil
+}
+
+// partDigest returns the raw SHA-256 digest of a part. Parts uploaded before
+// SHA-256 checksums were introduced have none stored, so their data is hashed.
+func partDigest(partMeta *s3.PartMetadata, partPath string) ([]byte, error) {
+	if partMeta.ChecksumSHA256 != "" {
+		return base64.StdEncoding.DecodeString(partMeta.ChecksumSHA256)
+	}
+	f, err := os.Open(partPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, f); err != nil {
+		return nil, err
+	}
+	return hash.Sum(nil), nil
 }

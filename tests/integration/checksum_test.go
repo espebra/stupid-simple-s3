@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -39,8 +40,8 @@ func checksumClient(t *testing.T, ts *TestServer) *s3.Client {
 	})
 }
 
-// TestAWSSDK_Checksums tests CRC32 checksums with the AWS SDK's default
-// checksum behaviour: a trailing CRC32 on uploads and response validation on downloads.
+// TestAWSSDK_Checksums tests SHA-256 checksums with the AWS SDK: a trailing
+// SHA-256 on uploads and response validation on downloads.
 func TestAWSSDK_Checksums(t *testing.T) {
 	ts := NewTestServer(t)
 	defer ts.Close()
@@ -53,15 +54,27 @@ func TestAWSSDK_Checksums(t *testing.T) {
 
 	t.Run("put returns checksum", func(t *testing.T) {
 		result, err := client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket: aws.String(TestBucket),
-			Key:    aws.String(key),
-			Body:   bytes.NewReader(content),
+			Bucket:            aws.String(TestBucket),
+			Key:               aws.String(key),
+			Body:              bytes.NewReader(content),
+			ChecksumAlgorithm: types.ChecksumAlgorithmSha256,
 		})
 		if err != nil {
 			t.Fatalf("PutObject failed: %v", err)
 		}
-		if result.ChecksumCRC32 == nil || *result.ChecksumCRC32 == "" {
-			t.Error("expected ChecksumCRC32 in PutObject response")
+		if result.ChecksumSHA256 == nil || *result.ChecksumSHA256 == "" {
+			t.Error("expected ChecksumSHA256 in PutObject response")
+		}
+	})
+
+	t.Run("put with default CRC32 checksum succeeds", func(t *testing.T) {
+		_, err := client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket: aws.String(TestBucket),
+			Key:    aws.String("default-checksum.txt"),
+			Body:   bytes.NewReader(content),
+		})
+		if err != nil {
+			t.Fatalf("PutObject failed: %v", err)
 		}
 	})
 
@@ -83,17 +96,17 @@ func TestAWSSDK_Checksums(t *testing.T) {
 		if !bytes.Equal(data, content) {
 			t.Errorf("content mismatch: got %q, want %q", data, content)
 		}
-		if result.ChecksumCRC32 == nil || *result.ChecksumCRC32 == "" {
-			t.Error("expected ChecksumCRC32 in GetObject response")
+		if result.ChecksumSHA256 == nil || *result.ChecksumSHA256 == "" {
+			t.Error("expected ChecksumSHA256 in GetObject response")
 		}
 	})
 
 	t.Run("wrong checksum is rejected", func(t *testing.T) {
 		_, err := client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket:        aws.String(TestBucket),
-			Key:           aws.String("bad-checksum.txt"),
-			Body:          bytes.NewReader(content),
-			ChecksumCRC32: aws.String("AAAAAA=="),
+			Bucket:         aws.String(TestBucket),
+			Key:            aws.String("bad-checksum.txt"),
+			Body:           bytes.NewReader(content),
+			ChecksumSHA256: aws.String("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
 		})
 		var apiErr smithy.APIError
 		if !errors.As(err, &apiErr) || apiErr.ErrorCode() != "BadDigest" {
@@ -120,8 +133,8 @@ func TestAWSSDK_Checksums(t *testing.T) {
 	})
 }
 
-// TestAWSSDK_MultipartChecksum tests that a multipart object's full-object
-// CRC32 is accepted by the AWS SDK's response validation.
+// TestAWSSDK_MultipartChecksum tests that a multipart object's composite
+// SHA-256 is accepted by the AWS SDK's response validation.
 func TestAWSSDK_MultipartChecksum(t *testing.T) {
 	ts := NewTestServer(t)
 	defer ts.Close()
@@ -160,7 +173,7 @@ func TestAWSSDK_MultipartChecksum(t *testing.T) {
 		})
 	}
 
-	_, err = client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+	completeResult, err := client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 		Bucket:          aws.String(TestBucket),
 		Key:             aws.String(key),
 		UploadId:        createResult.UploadId,
@@ -168,6 +181,12 @@ func TestAWSSDK_MultipartChecksum(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("CompleteMultipartUpload failed: %v", err)
+	}
+	if completeResult.ChecksumSHA256 == nil || !strings.HasSuffix(*completeResult.ChecksumSHA256, "-2") {
+		t.Errorf("ChecksumSHA256 = %v, want a composite checksum ending in -2", completeResult.ChecksumSHA256)
+	}
+	if completeResult.ChecksumType != types.ChecksumTypeComposite {
+		t.Errorf("ChecksumType = %q, want %q", completeResult.ChecksumType, types.ChecksumTypeComposite)
 	}
 
 	result, err := client.GetObject(ctx, &s3.GetObjectInput{
@@ -187,8 +206,8 @@ func TestAWSSDK_MultipartChecksum(t *testing.T) {
 	if !bytes.Equal(data, content) {
 		t.Error("multipart content mismatch")
 	}
-	if result.ChecksumType != types.ChecksumTypeFullObject {
-		t.Errorf("ChecksumType = %q, want %q", result.ChecksumType, types.ChecksumTypeFullObject)
+	if result.ChecksumType != types.ChecksumTypeComposite {
+		t.Errorf("ChecksumType = %q, want %q", result.ChecksumType, types.ChecksumTypeComposite)
 	}
 }
 

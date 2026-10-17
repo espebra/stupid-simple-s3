@@ -65,7 +65,7 @@ var errorStatusCodes = map[ErrorCode]int{
 
 var errorMessages = map[ErrorCode]string{
 	ErrAccessDenied:                 "Access Denied",
-	ErrBadDigest:                    "The CRC32 you specified did not match the calculated checksum.",
+	ErrBadDigest:                    "The SHA256 you specified did not match the calculated checksum.",
 	ErrBucketAlreadyOwnedByYou:      "Your previous request to create the named bucket succeeded and you already own it.",
 	ErrBucketNotEmpty:               "The bucket you tried to delete is not empty",
 	ErrInternalError:                "We encountered an internal error. Please try again.",

@@ -34,6 +34,9 @@ type CompleteMultipartUploadResult struct {
 	Bucket   string   `xml:"Bucket"`
 	Key      string   `xml:"Key"`
 	ETag     string   `xml:"ETag"`
+	// ChecksumSHA256 is the composite SHA-256 of the object, with a "-N" suffix
+	ChecksumSHA256 string `xml:"ChecksumSHA256,omitempty"`
+	ChecksumType   string `xml:"ChecksumType,omitempty"`
 }
 
 // CopyObjectResult is the response for CopyObject
@@ -135,11 +138,12 @@ type ObjectMetadata struct {
 	ContentType  string    `json:"content_type"`
 	ETag         string    `json:"etag"`
 	LastModified time.Time `json:"last_modified"`
-	// ChecksumCRC32 is the base64-encoded CRC32 of the object data, as sent in
-	// the x-amz-checksum-crc32 header. Empty for objects stored before checksums
-	// were introduced.
-	ChecksumCRC32 string            `json:"checksum_crc32,omitempty"`
-	UserMetadata  map[string]string `json:"user_metadata,omitempty"`
+	// ChecksumSHA256 is the base64-encoded SHA-256 of the object data, as sent
+	// in the x-amz-checksum-sha256 header. Multipart objects have a composite
+	// checksum: the SHA-256 of the concatenated part digests with a "-N" suffix.
+	// Empty for objects stored before SHA-256 checksums were introduced.
+	ChecksumSHA256 string            `json:"checksum_sha256,omitempty"`
+	UserMetadata   map[string]string `json:"user_metadata,omitempty"`
 }
 
 // MultipartUploadMetadata stores multipart upload metadata
@@ -157,6 +161,6 @@ type PartMetadata struct {
 	PartNumber int    `json:"part_number"`
 	ETag       string `json:"etag"`
 	Size       int64  `json:"size"`
-	// ChecksumCRC32 is the base64-encoded CRC32 of the part data
-	ChecksumCRC32 string `json:"checksum_crc32,omitempty"`
+	// ChecksumSHA256 is the base64-encoded SHA-256 of the part data
+	ChecksumSHA256 string `json:"checksum_sha256,omitempty"`
 }

@@ -255,7 +255,7 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Handle AWS chunked encoding (used by Minio SDK and some AWS SDK configurations)
-	// and verify the client's CRC32 checksum, if sent
+	// and verify the client's SHA-256 checksum, if sent
 	body, err := uploadBody(r, h.cfg.Limits.MaxChunkSize)
 	if err != nil {
 		drainRequestBody(r)
@@ -289,7 +289,7 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("ETag", meta.ETag)
-	setChecksumHeaders(w, meta.ChecksumCRC32)
+	setChecksumHeaders(w, meta.ChecksumSHA256)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -392,7 +392,7 @@ func (h *Handlers) GetObject(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
 	w.Header().Set("ETag", meta.ETag)
 	w.Header().Set("Last-Modified", meta.LastModified.UTC().Format(http.TimeFormat))
-	setChecksumHeaders(w, meta.ChecksumCRC32)
+	setChecksumHeaders(w, meta.ChecksumSHA256)
 	w.Header().Set("Accept-Ranges", "bytes")
 
 	// Set user metadata headers
@@ -618,7 +618,7 @@ func (h *Handlers) HeadObject(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
 	w.Header().Set("ETag", meta.ETag)
 	w.Header().Set("Last-Modified", meta.LastModified.UTC().Format(http.TimeFormat))
-	setChecksumHeaders(w, meta.ChecksumCRC32)
+	setChecksumHeaders(w, meta.ChecksumSHA256)
 
 	// Set user metadata headers
 	for k, v := range meta.UserMetadata {
@@ -748,7 +748,7 @@ func (h *Handlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 	metrics.UploadsActive.Inc()
 	defer metrics.UploadsActive.Dec()
 
-	// Handle AWS chunked encoding and verify the client's CRC32 checksum, if sent
+	// Handle AWS chunked encoding and verify the client's SHA-256 checksum, if sent
 	body, err := uploadBody(r, h.cfg.Limits.MaxChunkSize)
 	if err != nil {
 		drainRequestBody(r)
@@ -782,7 +782,7 @@ func (h *Handlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("ETag", partMeta.ETag)
-	w.Header().Set(checksumCRC32Header, partMeta.ChecksumCRC32)
+	w.Header().Set(checksumSHA256Header, partMeta.ChecksumSHA256)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -853,6 +853,10 @@ func (h *Handlers) CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 		ETag:   objMeta.ETag,
 		// Location intentionally omitted to prevent host header injection
 		// Clients should construct the URL from Bucket and Key if needed
+	}
+	if objMeta.ChecksumSHA256 != "" {
+		result.ChecksumSHA256 = objMeta.ChecksumSHA256
+		result.ChecksumType = "COMPOSITE"
 	}
 
 	w.Header().Set("Content-Type", "application/xml")
