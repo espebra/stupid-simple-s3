@@ -135,22 +135,24 @@ func TestAWSChunkedReaderInvalidHex(t *testing.T) {
 }
 
 func TestAWSChunkedReaderTruncatedInput(t *testing.T) {
-	// Claims 100 bytes (0x64) but input ends after "short" (5 bytes).
-	// The underlying reader returns io.EOF which is propagated. io.ReadAll
-	// treats EOF as normal termination so returns the partial data without
-	// error. This is consistent with the io.Reader contract. Data integrity
-	// is enforced at a higher level via ETag verification.
-	encoded := "64;chunk-signature=abc\r\nshort"
-	reader := newAWSChunkedReader(strings.NewReader(encoded), 0)
-	got, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("ReadAll: %v", err)
-	}
-	if string(got) != "short" {
-		t.Errorf("got %q, want %q", got, "short")
-	}
-	if reader.TotalRead() != 5 {
-		t.Errorf("TotalRead = %d, want 5", reader.TotalRead())
+	// An aws-chunked body ends with a zero-length chunk. A body that ends
+	// before it is truncated, and must not be read as a complete upload, or
+	// the truncated data would be stored as the object.
+	for name, encoded := range map[string]string{
+		"inside chunk data":       "64;chunk-signature=abc\r\nshort",
+		"at end of chunk data":    "5;chunk-signature=abc\r\nshort",
+		"after chunk data":        "5;chunk-signature=abc\r\nshort\r\n",
+		"inside chunk header":     "5;chunk-signature=abc\r\nshort\r\n0;chunk-sig",
+		"empty body":              "",
+		"before first chunk data": "5;chunk-signature=abc\r\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			reader := newAWSChunkedReader(strings.NewReader(encoded), 0)
+			_, err := io.ReadAll(reader)
+			if !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Errorf("ReadAll error = %v, want %v", err, io.ErrUnexpectedEOF)
+			}
+		})
 	}
 }
 

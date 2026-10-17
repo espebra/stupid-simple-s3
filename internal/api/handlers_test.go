@@ -2311,3 +2311,26 @@ func TestConditionalRequests(t *testing.T) {
 		assertErrorCode(t, w, http.StatusPreconditionFailed, s3.ErrPreconditionFailed)
 	})
 }
+
+func TestTruncatedUploadIsRejected(t *testing.T) {
+	handlers, store, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	// The aws-chunked body ends before its final, zero-length chunk
+	body := "5;chunk-signature=abc\r\nhello\r\n"
+	req := httptest.NewRequest("PUT", "/test-bucket/truncated", strings.NewReader(body))
+	req.SetPathValue("bucket", "test-bucket")
+	req.SetPathValue("key", "truncated")
+	req.Header.Set("Content-Encoding", "aws-chunked")
+	req.Header.Set("X-Amz-Content-Sha256", "STREAMING-UNSIGNED-PAYLOAD-TRAILER")
+	w := httptest.NewRecorder()
+
+	handlers.PutObject(w, req)
+
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), string(s3.ErrIncompleteBody)) {
+		t.Errorf("PUT = %d %s, want 400 %s", w.Code, w.Body.String(), s3.ErrIncompleteBody)
+	}
+	if exists, _ := store.ObjectExists("test-bucket", "truncated"); exists {
+		t.Error("truncated upload was stored")
+	}
+}

@@ -325,6 +325,10 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 			s3.WriteErrorResponse(w, s3.ErrBadDigest)
 			return
 		}
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			s3.WriteErrorResponse(w, s3.ErrIncompleteBody)
+			return
+		}
 		if code, ok := payloadErrorCode(err); ok {
 			s3.WriteErrorResponse(w, code)
 			return
@@ -931,6 +935,10 @@ func (h *Handlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, storage.ErrBadDigest) {
 			s3.WriteErrorResponse(w, s3.ErrBadDigest)
+			return
+		}
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			s3.WriteErrorResponse(w, s3.ErrIncompleteBody)
 			return
 		}
 		if code, ok := payloadErrorCode(err); ok {

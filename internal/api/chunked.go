@@ -62,7 +62,7 @@ func (r *awsChunkedReader) Read(p []byte) (n int, err error) {
 			// Read next chunk header
 			chunkSize, err := r.readChunkHeader()
 			if err != nil {
-				return n, err
+				return n, unexpectedEOF(err)
 			}
 
 			if chunkSize == 0 {
@@ -100,7 +100,7 @@ func (r *awsChunkedReader) Read(p []byte) (n int, err error) {
 		r.totalRead += int64(read)
 
 		if err != nil {
-			return n, err
+			return n, unexpectedEOF(err)
 		}
 
 		// If we've read the entire chunk, verify its signature and consume
@@ -118,6 +118,17 @@ func (r *awsChunkedReader) Read(p []byte) (n int, err error) {
 	}
 
 	return n, nil
+}
+
+// unexpectedEOF turns io.EOF into io.ErrUnexpectedEOF. The body must end
+// with the final, empty chunk, so input that ends before it is truncated.
+// Passing on io.EOF would make the caller store the truncated data as a
+// complete upload, and for a signed upload skip the final chunk signature.
+func unexpectedEOF(err error) error {
+	if err == io.EOF {
+		return io.ErrUnexpectedEOF
+	}
+	return err
 }
 
 // readLine reads up to and including the next newline. Unlike
