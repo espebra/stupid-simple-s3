@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/espen/stupid-simple-s3/internal/auth"
 	"github.com/espen/stupid-simple-s3/internal/storage"
 )
 
@@ -45,6 +46,8 @@ func uploadBody(r *http.Request, maxChunkSize int64) (io.Reader, error) {
 	var chunked *awsChunkedReader
 	if isAWSChunkedEncoding(r.Header.Get("Content-Encoding"), r.Header.Get("X-Amz-Content-Sha256")) {
 		chunked = newAWSChunkedReader(r.Body, maxChunkSize)
+		// Set by AuthMiddleware for signed aws-chunked uploads
+		chunked.verifier, _ = r.Context().Value(chunkVerifierContextKey).(*auth.ChunkVerifier)
 		body = chunked
 	}
 

@@ -211,6 +211,8 @@ PutObject, GetObject, HeadObject, UploadPart and CompleteMultipartUpload return 
 - `FULL_OBJECT` for objects uploaded with PutObject: the base64 SHA-256 of the object data. AWS SDKs validate downloads against it when response checksum validation is enabled, which is their default.
 - `COMPOSITE` for multipart objects: the base64 SHA-256 of the concatenated binary SHA-256 digests of the parts, followed by `-N` where N is the number of parts. SDKs cannot recompute it from the object data and skip validating it.
 
+Request bodies are also checked against the request signature. When `X-Amz-Content-Sha256` holds the SHA-256 of the body, a body that does not match is rejected with `400 XAmzContentSHA256Mismatch`. For signed aws-chunked uploads (`STREAMING-AWS4-HMAC-SHA256-PAYLOAD`), every chunk signature and the trailer signature are verified, and a mismatch is rejected with `403 SignatureDoesNotMatch`. Requests sent with `UNSIGNED-PAYLOAD`, which is what AWS SDKs use over HTTPS, only have their body verified if they include an `x-amz-checksum-sha256` checksum, so the connection between the TLS proxy and the service must be trusted for other uploads.
+
 Range requests do not return a checksum. Objects stored before SHA-256 checksums were introduced have none.
 
 ETags are derived from the same digests: `"sha256-<hex>"` for objects and parts, and `"sha256-<hex>-N"` for multipart objects. They depend only on the content, so uploading identical data again keeps the ETag. They are not MD5 digests, so tools that compare ETags with a locally computed MD5 cannot use them. The `-` is intentional: AWS SDK for Java v1 treats an ETag without one as an MD5 digest and fails to validate it.

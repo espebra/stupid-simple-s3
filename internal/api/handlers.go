@@ -40,6 +40,45 @@ func drainRequestBody(r *http.Request) {
 	}
 }
 
+// payloadErrorCode returns the S3 error code for a request body that failed
+// signature verification: a body that does not match its signed
+// X-Amz-Content-Sha256, or an aws-chunked chunk with a wrong signature.
+func payloadErrorCode(err error) (s3.ErrorCode, bool) {
+	switch {
+	case errors.Is(err, auth.ErrContentSHA256Mismatch):
+		return s3.ErrXAmzContentSHA256Mismatch, true
+	case errors.Is(err, auth.ErrChunkSignatureMismatch):
+		return s3.ErrSignatureDoesNotMatch, true
+	}
+	return "", false
+}
+
+// errXMLBodyTooLarge is returned by readXMLBody for a body over the size limit
+var errXMLBodyTooLarge = errors.New("XML request body too large")
+
+// readXMLBody reads a request body of at most maxSize bytes and decodes it as
+// XML into v. It reads the body to the end, rather than only up to the end of
+// the XML element, so that the body's signed SHA-256 is verified.
+func readXMLBody(r *http.Request, maxSize int64, v any) error {
+	data, err := io.ReadAll(io.LimitReader(r.Body, maxSize+1))
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) > maxSize {
+		return errXMLBodyTooLarge
+	}
+	return xml.Unmarshal(data, v)
+}
+
+// writeXMLBodyError writes the error response for a readXMLBody error
+func writeXMLBodyError(w http.ResponseWriter, err error) {
+	if code, ok := payloadErrorCode(err); ok {
+		s3.WriteErrorResponse(w, code)
+		return
+	}
+	s3.WriteErrorResponse(w, s3.ErrMalformedXML)
+}
+
 // isASCIIPrintable checks if a byte is ASCII printable (space through tilde)
 func isASCIIPrintable(c byte) bool {
 	return c >= 0x20 && c <= 0x7E
@@ -284,6 +323,10 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, storage.ErrBadDigest) {
 			s3.WriteErrorResponse(w, s3.ErrBadDigest)
+			return
+		}
+		if code, ok := payloadErrorCode(err); ok {
+			s3.WriteErrorResponse(w, code)
 			return
 		}
 		if errors.Is(err, storage.ErrInvalidKey) {
@@ -874,6 +917,10 @@ func (h *Handlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 			s3.WriteErrorResponse(w, s3.ErrBadDigest)
 			return
 		}
+		if code, ok := payloadErrorCode(err); ok {
+			s3.WriteErrorResponse(w, code)
+			return
+		}
 		if errors.Is(err, storage.ErrUploadNotFound) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchUpload)
 			return
@@ -921,10 +968,9 @@ func (h *Handlers) CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 	// Parse request body with size limit to prevent XML bomb attacks
 	// Limit to 1MB which is more than enough for 10,000 parts
 	const maxXMLBodySize = 1 * 1024 * 1024
-	limitedBody := io.LimitReader(r.Body, maxXMLBodySize)
 	var completeReq s3.CompleteMultipartUpload
-	if err := xml.NewDecoder(limitedBody).Decode(&completeReq); err != nil {
-		s3.WriteErrorResponse(w, s3.ErrMalformedXML)
+	if err := readXMLBody(r, maxXMLBodySize, &completeReq); err != nil {
+		writeXMLBodyError(w, err)
 		return
 	}
 
@@ -1244,10 +1290,9 @@ func (h *Handlers) DeleteObjects(w http.ResponseWriter, r *http.Request) {
 	// Parse request body with size limit to prevent XML bomb attacks
 	// Limit to 1MB which is more than enough for batch delete requests
 	const maxXMLBodySize = 1 * 1024 * 1024
-	limitedBody := io.LimitReader(r.Body, maxXMLBodySize)
 	var deleteReq s3.Delete
-	if err := xml.NewDecoder(limitedBody).Decode(&deleteReq); err != nil {
-		s3.WriteErrorResponse(w, s3.ErrMalformedXML)
+	if err := readXMLBody(r, maxXMLBodySize, &deleteReq); err != nil {
+		writeXMLBodyError(w, err)
 		return
 	}
 

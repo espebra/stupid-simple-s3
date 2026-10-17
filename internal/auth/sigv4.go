@@ -38,6 +38,9 @@ type AuthResult struct {
 	Region        string
 	Service       string
 	SignedHeaders []string
+	// ChunkVerifier verifies the chunk signatures of a signed aws-chunked
+	// upload. It is nil for other requests.
+	ChunkVerifier *ChunkVerifier
 }
 
 // ParsedAuthorization contains parsed authorization header components
@@ -152,12 +155,21 @@ func (s *SignatureV4) VerifyRequest(r *http.Request, secretKey string) (*AuthRes
 		return nil, fmt.Errorf("signature mismatch")
 	}
 
-	return &AuthResult{
+	result := &AuthResult{
 		AccessKeyID:   parsed.AccessKeyID,
 		Region:        parsed.Region,
 		Service:       parsed.Service,
 		SignedHeaders: parsed.SignedHeaders,
-	}, nil
+	}
+	if payloadHash := r.Header.Get("X-Amz-Content-Sha256"); payloadHash == StreamingPayload || payloadHash == StreamingPayloadTrailer {
+		result.ChunkVerifier = &ChunkVerifier{
+			signingKey:    signingKey,
+			amzDate:       amzDate,
+			scope:         credentialScope,
+			prevSignature: parsed.Signature,
+		}
+	}
+	return result, nil
 }
 
 // buildCanonicalRequest creates the canonical request string

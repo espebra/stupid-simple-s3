@@ -23,8 +23,10 @@ type contextKey string
 
 const (
 	credentialContextKey contextKey = "credential"
-	operationContextKey  contextKey = "operation"
-	requestIDContextKey  contextKey = "request_id"
+	// chunkVerifierContextKey holds the *auth.ChunkVerifier of a signed aws-chunked upload
+	chunkVerifierContextKey contextKey = "chunk-verifier"
+	operationContextKey     contextKey = "operation"
+	requestIDContextKey     contextKey = "request_id"
 )
 
 const requestIDHeader = "X-Request-ID"
@@ -479,7 +481,7 @@ func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			}
 
 			// Verify signature
-			_, err = sigv4.VerifyRequest(r, cred.SecretAccessKey)
+			authResult, err := sigv4.VerifyRequest(r, cred.SecretAccessKey)
 			if err != nil {
 				time.Sleep(authFailureDelay)
 				// Check for specific error types
@@ -509,8 +511,18 @@ func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 				return
 			}
 
+			// The signature covers the X-Amz-Content-Sha256 header, not the
+			// body. Verify that the body matches it as it is read, or for a
+			// signed aws-chunked upload, let uploadBody verify each chunk.
+			if payloadHash := r.Header.Get("X-Amz-Content-Sha256"); auth.IsPayloadHash(payloadHash) && r.Body != nil {
+				r.Body = auth.NewPayloadVerifier(r.Body, payloadHash)
+			}
+
 			// Store credential in context for handlers to check privileges
 			ctx := context.WithValue(r.Context(), credentialContextKey, cred)
+			if authResult.ChunkVerifier != nil {
+				ctx = context.WithValue(ctx, chunkVerifierContextKey, authResult.ChunkVerifier)
+			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

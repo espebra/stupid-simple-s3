@@ -2,12 +2,16 @@ package api
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/espen/stupid-simple-s3/internal/auth"
 )
 
 // maxTrailerLines limits how many trailer lines are accepted after the final chunk
@@ -33,6 +37,12 @@ type awsChunkedReader struct {
 	totalRead    int64
 	maxChunkSize int64
 	trailers     map[string]string
+
+	// verifier checks chunk and trailer signatures when the upload is
+	// signed (STREAMING-AWS4-HMAC-SHA256-PAYLOAD). nil skips the checks.
+	verifier       *auth.ChunkVerifier
+	chunkHash      hash.Hash
+	chunkSignature string
 }
 
 // newAWSChunkedReader creates a new AWS chunked reader
@@ -57,6 +67,12 @@ func (r *awsChunkedReader) Read(p []byte) (n int, err error) {
 			}
 
 			if chunkSize == 0 {
+				// The final, empty chunk is signed like the others
+				if r.verifier != nil {
+					if err := r.verifier.VerifyChunk(r.chunkHash.Sum(nil), r.chunkSignature); err != nil {
+						return n, err
+					}
+				}
 				// Final chunk - read trailers up to the terminating empty line
 				if err := r.readTrailers(); err != nil {
 					return n, err
@@ -79,6 +95,9 @@ func (r *awsChunkedReader) Read(p []byte) (n int, err error) {
 		}
 
 		read, err := r.reader.Read(p[n : n+toRead])
+		if r.verifier != nil {
+			r.chunkHash.Write(p[n : n+read])
+		}
 		n += read
 		r.remaining -= int64(read)
 		r.totalRead += int64(read)
@@ -87,8 +106,14 @@ func (r *awsChunkedReader) Read(p []byte) (n int, err error) {
 			return n, err
 		}
 
-		// If we've read the entire chunk, consume the trailing CRLF
+		// If we've read the entire chunk, verify its signature and consume
+		// the trailing CRLF
 		if r.remaining == 0 {
+			if r.verifier != nil {
+				if err := r.verifier.VerifyChunk(r.chunkHash.Sum(nil), r.chunkSignature); err != nil {
+					return n, err
+				}
+			}
 			if _, err := r.readLine(); err != nil && err != io.EOF {
 				return n, err
 			}
@@ -125,6 +150,16 @@ func (r *awsChunkedReader) readChunkHeader() (int64, error) {
 	if len(parts) == 0 {
 		return 0, fmt.Errorf("invalid chunk header")
 	}
+	r.chunkSignature = ""
+	if len(parts) == 2 {
+		r.chunkSignature, _ = strings.CutPrefix(parts[1], "chunk-signature=")
+	}
+	if r.verifier != nil {
+		if r.chunkHash == nil {
+			r.chunkHash = sha256.New()
+		}
+		r.chunkHash.Reset()
+	}
 
 	size, err := strconv.ParseInt(parts[0], 16, 64)
 	if err != nil {
@@ -143,8 +178,10 @@ func (r *awsChunkedReader) readChunkHeader() (int64, error) {
 }
 
 // readTrailers reads the trailer lines after the final chunk until an empty
-// line or end of input.
+// line or end of input, and verifies the trailer signature of a signed upload.
 func (r *awsChunkedReader) readTrailers() error {
+	// signed holds the trailer lines covered by x-amz-trailer-signature
+	var signed strings.Builder
 	for i := 0; i < maxTrailerLines; i++ {
 		line, err := r.readLine()
 		if err != nil && err != io.EOF {
@@ -152,19 +189,35 @@ func (r *awsChunkedReader) readTrailers() error {
 		}
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
-			return nil
+			return r.verifyTrailers(signed.String())
 		}
 		if name, value, ok := strings.Cut(line, ":"); ok {
 			if r.trailers == nil {
 				r.trailers = make(map[string]string)
 			}
-			r.trailers[strings.ToLower(strings.TrimSpace(name))] = strings.TrimSpace(value)
+			name = strings.ToLower(strings.TrimSpace(name))
+			r.trailers[name] = strings.TrimSpace(value)
+			if name != trailerSignatureName {
+				signed.WriteString(line + "\n")
+			}
 		}
 		if err == io.EOF {
-			return nil
+			return r.verifyTrailers(signed.String())
 		}
 	}
 	return fmt.Errorf("too many trailer lines")
+}
+
+// trailerSignatureName is the trailer that signs the other trailers
+const trailerSignatureName = "x-amz-trailer-signature"
+
+// verifyTrailers checks the trailer signature of a signed upload that sent
+// trailers. Without a verifier, or without trailers, there is nothing to check.
+func (r *awsChunkedReader) verifyTrailers(signed string) error {
+	if r.verifier == nil || signed == "" {
+		return nil
+	}
+	return r.verifier.VerifyTrailer(signed, r.trailers[trailerSignatureName])
 }
 
 // Trailer returns the value of the named trailer, or "" if it was not sent.
