@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -170,6 +169,10 @@ type FilesystemStorage struct {
 	// to a fixed set of locks, so no per-name state accumulates. Only one is
 	// ever held at a time, so they cannot deadlock.
 	commitLocks [256]sync.RWMutex
+
+	// indexes holds the listing index of each bucket listed since startup
+	indexMu sync.Mutex
+	indexes map[string]*bucketIndex
 }
 
 // commitLock returns the lock that serializes commits for the given name
@@ -372,6 +375,7 @@ func (fs *FilesystemStorage) DeleteBucket(name string) error {
 	if err := os.Remove(bucketPath); err != nil {
 		return fmt.Errorf("removing bucket directory: %w", err)
 	}
+	fs.dropIndex(name)
 
 	return nil
 }
@@ -449,7 +453,7 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 		return nil, fmt.Errorf("writing metadata: %w", err)
 	}
 
-	if err := fs.commitObject(objPath, tmpPath, metaTmpPath); err != nil {
+	if err := fs.commitObject(bucket, objPath, tmpPath, metaTmpPath, objMeta); err != nil {
 		return nil, err
 	}
 
@@ -522,7 +526,7 @@ func readObjectMetadata(metaPath string) (*s3.ObjectMetadata, error) {
 // to the same key cannot interleave and leave the data of one write with
 // the metadata of another. If the metadata cannot be renamed, the data file
 // is removed as well.
-func (fs *FilesystemStorage) commitObject(objPath, dataTmpPath, metaTmpPath string) error {
+func (fs *FilesystemStorage) commitObject(bucket, objPath, dataTmpPath, metaTmpPath string, meta *s3.ObjectMetadata) error {
 	commit := fs.commitLock(objPath)
 	commit.Lock()
 	defer commit.Unlock()
@@ -537,6 +541,9 @@ func (fs *FilesystemStorage) commitObject(objPath, dataTmpPath, metaTmpPath stri
 		_ = os.Remove(metaTmpPath)
 		_ = os.Remove(dataPath)
 		return fmt.Errorf("renaming metadata file: %w", err)
+	}
+	if idx := fs.existingIndex(bucket); idx != nil {
+		idx.set(meta)
 	}
 	return nil
 }
@@ -553,6 +560,11 @@ func (fs *FilesystemStorage) DeleteObject(bucket, key string) error {
 	commit := fs.commitLock(objPath)
 	commit.Lock()
 	err = os.RemoveAll(objPath)
+	if err == nil {
+		if idx := fs.existingIndex(bucket); idx != nil {
+			idx.remove(key)
+		}
+	}
 	commit.Unlock()
 	if err != nil {
 		return fmt.Errorf("removing object: %w", err)
@@ -642,12 +654,6 @@ func (l *limitedReadCloser) Close() error {
 	return l.closer.Close()
 }
 
-// objectEntry holds just the key and meta.json path for lightweight sorting/filtering.
-type objectEntry struct {
-	key      string
-	metaPath string
-}
-
 // listTokenPrefixMarker starts the continuation token of a page that ended
 // with a common prefix. Keys cannot contain a NUL byte (ValidateKey), so it
 // cannot be confused with the token of a page that ended with an object.
@@ -676,57 +682,12 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 		opts.MaxKeys = 1000
 	}
 
-	objectsPath := filepath.Join(fs.basePath, "buckets", bucket, "objects")
-
-	// Pass 1: Walk filesystem and collect only keys and meta.json paths.
-	// This avoids decoding full metadata for every object.
-	var entries []objectEntry
-
-	err := filepath.WalkDir(objectsPath, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		// Skip non-directories and the root
-		if !d.IsDir() {
-			return nil
-		}
-
-		// Check if this is an object directory (contains meta.json)
-		metaPath := filepath.Join(path, "meta.json")
-		if _, statErr := os.Stat(metaPath); statErr != nil {
-			return nil
-		}
-
-		// Read only the key from meta.json using a minimal struct
-		metaFile, err := os.Open(metaPath)
-		if err != nil {
-			return nil
-		}
-		defer func() { _ = metaFile.Close() }()
-
-		var partial struct {
-			Key string `json:"key"`
-		}
-		if err := json.NewDecoder(metaFile).Decode(&partial); err != nil {
-			return nil
-		}
-
-		entries = append(entries, objectEntry{key: partial.Key, metaPath: metaPath})
-		return nil
-	})
+	idx, err := fs.loadIndex(bucket)
 	if err != nil {
-		return nil, fmt.Errorf("walking objects directory: %w", err)
+		return nil, err
 	}
 
-	// Sort entries by key
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].key < entries[j].key
-	})
-
-	// Apply filtering and pagination on lightweight entries
 	result := &ListObjectsResult{}
-	commonPrefixSet := make(map[string]bool)
 	startKey := opts.StartAfter
 	skipPrefix := ""
 	if opts.ContinuationToken != "" {
@@ -740,79 +701,68 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 		}
 	}
 
-	// resultEntries tracks which entries need full metadata loaded (pass 2).
-	// Each object and each common prefix counts as one entry against MaxKeys,
-	// as in S3. lastToken is the continuation token for the last entry.
-	var resultEntries []objectEntry
-	count := 0
-	lastToken := ""
-	for _, entry := range entries {
-		// Skip objects up to startKey, and all keys under a common prefix
-		// that ended the previous page
-		if startKey != "" && entry.key <= startKey {
-			continue
+	// Keys under opts.Prefix form one range of the sorted index, starting at
+	// the prefix itself. cursor is where the scan (re)starts: past startKey,
+	// and past every key under a common prefix that ended the previous page.
+	cursor := opts.Prefix
+	if startKey > cursor {
+		cursor = startKey
+	}
+	if skipPrefix != "" {
+		next, ok := prefixSuccessor(skipPrefix)
+		if !ok {
+			return result, nil
 		}
-		if skipPrefix != "" && strings.HasPrefix(entry.key, skipPrefix) {
-			continue
+		if next > cursor {
+			cursor = next
 		}
-
-		// Apply prefix filter
-		if opts.Prefix != "" && !strings.HasPrefix(entry.key, opts.Prefix) {
-			continue
-		}
-
-		// Handle delimiter (for common prefixes / virtual directories)
-		if opts.Delimiter != "" {
-			// Find delimiter after prefix
-			afterPrefix := entry.key[len(opts.Prefix):]
-			delimIdx := strings.Index(afterPrefix, opts.Delimiter)
-			if delimIdx >= 0 {
-				// This is a common prefix — no full metadata needed
-				commonPrefix := opts.Prefix + afterPrefix[:delimIdx+len(opts.Delimiter)]
-				if commonPrefixSet[commonPrefix] {
-					continue
-				}
-				if count >= opts.MaxKeys {
-					result.IsTruncated = true
-					result.NextContinuationToken = lastToken
-					break
-				}
-				commonPrefixSet[commonPrefix] = true
-				result.CommonPrefixes = append(result.CommonPrefixes, commonPrefix)
-				count++
-				lastToken = listToken(commonPrefix, true)
-				continue
-			}
-		}
-
-		// Check if we've reached the limit
-		if count >= opts.MaxKeys {
-			result.IsTruncated = true
-			result.NextContinuationToken = lastToken
-			break
-		}
-
-		resultEntries = append(resultEntries, entry)
-		count++
-		lastToken = listToken(entry.key, false)
 	}
 
-	// Pass 2: Load full metadata only for the result page entries.
-	result.Objects = make([]s3.ObjectMetadata, 0, len(resultEntries))
-	for _, entry := range resultEntries {
-		metaFile, err := os.Open(entry.metaPath)
-		if err != nil {
-			continue // skip objects that disappeared between passes
-		}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
 
-		var meta s3.ObjectMetadata
-		if err := json.NewDecoder(metaFile).Decode(&meta); err != nil {
-			_ = metaFile.Close()
-			continue
-		}
-		_ = metaFile.Close()
-
-		result.Objects = append(result.Objects, meta)
+	// Each object and each common prefix counts as one entry against
+	// MaxKeys, as in S3. lastToken is the continuation token for the last
+	// entry. After a common prefix, the scan restarts past all keys under it.
+	count := 0
+	lastToken := ""
+	for done := false; !done; {
+		done = true
+		idx.tree.AscendGreaterOrEqual(&indexEntry{key: cursor}, func(e *indexEntry) bool {
+			if startKey != "" && e.key <= startKey {
+				return true
+			}
+			if !strings.HasPrefix(e.key, opts.Prefix) {
+				return false
+			}
+			if opts.Delimiter != "" {
+				afterPrefix := e.key[len(opts.Prefix):]
+				if delimIdx := strings.Index(afterPrefix, opts.Delimiter); delimIdx >= 0 {
+					commonPrefix := opts.Prefix + afterPrefix[:delimIdx+len(opts.Delimiter)]
+					if count >= opts.MaxKeys {
+						result.IsTruncated = true
+						result.NextContinuationToken = lastToken
+						return false
+					}
+					result.CommonPrefixes = append(result.CommonPrefixes, commonPrefix)
+					count++
+					lastToken = listToken(commonPrefix, true)
+					if next, ok := prefixSuccessor(commonPrefix); ok {
+						cursor, done = next, false
+					}
+					return false
+				}
+			}
+			if count >= opts.MaxKeys {
+				result.IsTruncated = true
+				result.NextContinuationToken = lastToken
+				return false
+			}
+			result.Objects = append(result.Objects, e.metadata())
+			count++
+			lastToken = listToken(e.key, false)
+			return true
+		})
 	}
 
 	return result, nil

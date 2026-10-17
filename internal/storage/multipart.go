@@ -315,7 +315,7 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 		return nil, fmt.Errorf("writing metadata: %w", err)
 	}
 
-	if err := fs.commitObject(objPath, tmpPath, metaTmpPath); err != nil {
+	if err := fs.commitObject(uploadMeta.Bucket, objPath, tmpPath, metaTmpPath, objMeta); err != nil {
 		return nil, err
 	}
 
