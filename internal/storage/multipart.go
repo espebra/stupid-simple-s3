@@ -248,14 +248,17 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 		totalSize += partMeta.Size
 	}
 
-	// Create object directory
+	// The object directory is created only after the object has been
+	// assembled in the temp directory (prepareObjectDir)
 	objPath, keyErr := fs.keyToPath(uploadMeta.Bucket, uploadMeta.Key)
 	if keyErr != nil {
 		return nil, keyErr
 	}
-	if err := createObjectDir(objPath); err != nil {
-		return nil, err
-	}
+
+	// Keep the bucket from being deleted until the object is committed
+	bucketLock := fs.bucketLock(uploadMeta.Bucket)
+	bucketLock.RLock()
+	defer bucketLock.RUnlock()
 
 	tmpPath, metaTmpPath, err := fs.newTempFilePaths(uploadMeta.Bucket)
 	if err != nil {
@@ -315,6 +318,11 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 		return nil, fmt.Errorf("writing metadata: %w", err)
 	}
 
+	if err := fs.prepareObjectDir(objPath); err != nil {
+		_ = os.Remove(tmpPath)
+		_ = os.Remove(metaTmpPath)
+		return nil, err
+	}
 	if err := fs.commitObject(uploadMeta.Bucket, objPath, tmpPath, metaTmpPath, objMeta); err != nil {
 		return nil, err
 	}

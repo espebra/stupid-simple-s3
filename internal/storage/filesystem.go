@@ -170,9 +170,21 @@ type FilesystemStorage struct {
 	// ever held at a time, so they cannot deadlock.
 	commitLocks [256]sync.RWMutex
 
+	// bucketLocks holds a per-bucket RWMutex. Writes hold the read lock from
+	// creating their temp files until they commit; DeleteBucket takes the
+	// write lock, so it never removes the temp files of a write in progress.
+	bucketLocks sync.Map // map[string]*sync.RWMutex
+
 	// indexes holds the listing index of each bucket listed since startup
 	indexMu sync.Mutex
 	indexes map[string]*bucketIndex
+}
+
+// bucketLock returns the lock that keeps a bucket from being deleted while
+// writes to it are in progress
+func (fs *FilesystemStorage) bucketLock(bucket string) *sync.RWMutex {
+	lock, _ := fs.bucketLocks.LoadOrStore(bucket, &sync.RWMutex{})
+	return lock.(*sync.RWMutex)
 }
 
 // commitLock returns the lock that serializes commits for the given name
@@ -332,6 +344,32 @@ func (fs *FilesystemStorage) BucketExists(name string) (bool, error) {
 	return false, fmt.Errorf("checking bucket existence: %w", err)
 }
 
+// prepareObjectDir creates the directory of an object that is about to be
+// committed and checks that it is inside the base path. Writes call it only
+// after their temp files are complete, so that a failed write does not
+// leave an empty object directory, which would keep the bucket from being
+// deleted.
+func (fs *FilesystemStorage) prepareObjectDir(objPath string) error {
+	if err := createObjectDir(objPath); err != nil {
+		return err
+	}
+
+	// Defense in depth: verify created directory is within base path (catches symlink attacks)
+	realObjPath, err := filepath.EvalSymlinks(objPath)
+	if err != nil {
+		return fmt.Errorf("resolving object path: %w", err)
+	}
+	absBase, _ := filepath.Abs(fs.basePath)
+	if realBase, err := filepath.EvalSymlinks(absBase); err == nil {
+		absBase = realBase
+	}
+	if !strings.HasPrefix(realObjPath, absBase+string(filepath.Separator)) {
+		_ = os.RemoveAll(objPath) // Clean up potentially dangerous directory
+		return fmt.Errorf("%w: path escapes base directory via symlink", ErrInvalidKey)
+	}
+	return nil
+}
+
 // createObjectDir creates an object directory and its shard directory inside
 // the bucket's objects directory. Unlike os.MkdirAll it never creates the
 // objects directory itself, so it returns ErrBucketNotFound instead of
@@ -371,6 +409,43 @@ func isMissingDirError(err error) bool {
 	return os.IsNotExist(err) || errors.Is(err, syscall.EINVAL)
 }
 
+// isNotEmptyError reports whether removing a directory failed because it
+// is not empty
+func isNotEmptyError(err error) bool {
+	return errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST)
+}
+
+// removeLeftoverObjectDirs removes empty object directories, and shard
+// directories left empty, from a bucket's objects directory. It stops and
+// returns true at the first object it finds (a directory with meta.json),
+// so for a bucket with objects it reads little. The caller must hold the
+// bucket's write lock, so that no write is between creating its object
+// directory and renaming its files into it.
+func removeLeftoverObjectDirs(objectsPath string) (hasObjects bool) {
+	shards, err := os.ReadDir(objectsPath)
+	if err != nil {
+		return false
+	}
+	for _, shard := range shards {
+		shardPath := filepath.Join(objectsPath, shard.Name())
+		objects, err := os.ReadDir(shardPath)
+		if err != nil {
+			continue
+		}
+		for _, obj := range objects {
+			objPath := filepath.Join(shardPath, obj.Name())
+			if _, err := os.Stat(filepath.Join(objPath, "meta.json")); err == nil {
+				return true
+			}
+			// Fails, and keeps the directory, unless it is empty
+			_ = os.Remove(objPath)
+		}
+		// Fails unless the shard directory is now empty
+		_ = os.Remove(shardPath)
+	}
+	return false
+}
+
 // DeleteBucket deletes a bucket (must be empty)
 func (fs *FilesystemStorage) DeleteBucket(name string) error {
 	if err := ValidateBucketName(name); err != nil {
@@ -390,8 +465,27 @@ func (fs *FilesystemStorage) DeleteBucket(name string) error {
 	// the directory, including an object created concurrently. Writers create
 	// object directories without recreating objects/ (createObjectDir), so a
 	// write that races with the removal fails instead of reviving the bucket.
-	if err := os.Remove(objectsPath); err != nil {
-		if errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
+	// A bucket with writes in progress is not empty. Writes that start
+	// while it is being deleted wait, and then find it gone.
+	bucketLock := fs.bucketLock(name)
+	if !bucketLock.TryLock() {
+		return ErrBucketNotEmpty
+	}
+	defer bucketLock.Unlock()
+
+	err := os.Remove(objectsPath)
+	if isNotEmptyError(err) {
+		// The bucket may hold only empty object directories, left by failed
+		// writes of earlier versions. With no writes in progress, an empty
+		// object directory cannot belong to a write about to commit, so
+		// remove them and try again.
+		if hasObjects := removeLeftoverObjectDirs(objectsPath); hasObjects {
+			return ErrBucketNotEmpty
+		}
+		err = os.Remove(objectsPath)
+	}
+	if err != nil {
+		if isNotEmptyError(err) {
 			return ErrBucketNotEmpty
 		}
 		if os.IsNotExist(err) {
@@ -399,13 +493,9 @@ func (fs *FilesystemStorage) DeleteBucket(name string) error {
 		}
 		return fmt.Errorf("removing objects directory: %w", err)
 	}
-	// Only leftovers of interrupted writes can be in the temp directory: a
-	// write in progress has created its object directory, which keeps the
-	// objects directory from being removed.
-	if err := os.RemoveAll(fs.bucketTmpDir(name)); err != nil {
-		return fmt.Errorf("removing bucket temp directory: %w", err)
-	}
-	if err := os.Remove(bucketPath); err != nil {
+	// Without the objects directory, and with no writes in progress, the
+	// rest of the bucket directory is leftover temp files
+	if err := os.RemoveAll(bucketPath); err != nil {
 		return fmt.Errorf("removing bucket directory: %w", err)
 	}
 	fs.dropIndex(name)
@@ -420,27 +510,15 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 		return nil, err
 	}
 
-	// Create object directory
-	if err := createObjectDir(objPath); err != nil {
-		return nil, err
-	}
-
-	// Defense in depth: verify created directory is within base path (catches symlink attacks)
-	realObjPath, err := filepath.EvalSymlinks(objPath)
-	if err != nil {
-		return nil, fmt.Errorf("resolving object path: %w", err)
-	}
-	absBase, _ := filepath.Abs(fs.basePath)
-	if realBase, err := filepath.EvalSymlinks(absBase); err == nil {
-		absBase = realBase
-	}
-	if !strings.HasPrefix(realObjPath, absBase+string(filepath.Separator)) {
-		_ = os.RemoveAll(objPath) // Clean up potentially dangerous directory
-		return nil, fmt.Errorf("%w: path escapes base directory via symlink", ErrInvalidKey)
-	}
+	// Keep the bucket from being deleted until the write is committed
+	bucketLock := fs.bucketLock(bucket)
+	bucketLock.RLock()
+	defer bucketLock.RUnlock()
 
 	// Write data to a temp file first, then rename. Each write has its own
 	// temp files, so concurrent writes to the same key do not conflict.
+	// The object directory is only created once the data has been received
+	// (prepareObjectDir), so a failed upload leaves nothing behind.
 	tmpPath, metaTmpPath, err := fs.newTempFilePaths(bucket)
 	if err != nil {
 		return nil, err
@@ -485,6 +563,11 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 		return nil, fmt.Errorf("writing metadata: %w", err)
 	}
 
+	if err := fs.prepareObjectDir(objPath); err != nil {
+		_ = os.Remove(tmpPath)
+		_ = os.Remove(metaTmpPath)
+		return nil, err
+	}
 	if err := fs.commitObject(bucket, objPath, tmpPath, metaTmpPath, objMeta); err != nil {
 		return nil, err
 	}
