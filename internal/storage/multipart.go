@@ -257,9 +257,10 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 		return nil, err
 	}
 
-	dataPath := filepath.Join(objPath, "data")
-	tmpID := uuid.New().String()
-	tmpPath := dataPath + ".tmp." + tmpID
+	tmpPath, metaTmpPath, err := fs.newTempFilePaths(uploadMeta.Bucket)
+	if err != nil {
+		return nil, err
+	}
 
 	// Concatenate all parts. Copying file to file lets the kernel use
 	// copy_file_range, which avoids user-space copies and can share extents
@@ -309,7 +310,6 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 		ChecksumSHA256: fmt.Sprintf("%s-%d", EncodeChecksum(compositeSum), len(parts)),
 	}
 
-	metaTmpPath := filepath.Join(objPath, "meta.json.tmp."+tmpID)
 	if err := writeJSONFile(metaTmpPath, objMeta); err != nil {
 		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("writing metadata: %w", err)
@@ -584,41 +584,43 @@ func (fs *FilesystemStorage) cleanupUploadIfStale(uploadID string, cutoff time.T
 	return false
 }
 
-// CleanupStaleTempFiles removes orphaned .tmp.* files from object directories.
-// These can be left behind by PutObject or CompleteMultipartUpload that failed
-// or was interrupted after creating the temp file but before renaming it.
+// CleanupStaleTempFiles removes orphaned temp files from the buckets' temp
+// directories. These can be left behind by PutObject or
+// CompleteMultipartUpload when the process stops after creating the temp
+// file but before renaming it. Only the temp directories are read, not the
+// object directories, so the cost does not grow with the number of objects.
 func (fs *FilesystemStorage) CleanupStaleTempFiles(maxAge time.Duration) (int, error) {
 	bucketsPath := filepath.Join(fs.basePath, "buckets")
 	cutoff := time.Now().Add(-maxAge)
 	cleaned := 0
 
-	err := filepath.WalkDir(bucketsPath, func(path string, d os.DirEntry, err error) error {
+	buckets, err := os.ReadDir(bucketsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("reading buckets directory: %w", err)
+	}
+	for _, bucket := range buckets {
+		if !bucket.IsDir() {
+			continue
+		}
+		tmpDir := filepath.Join(bucketsPath, bucket.Name(), "tmp")
+		entries, err := os.ReadDir(tmpDir)
 		if err != nil {
-			return nil // skip directories we can't read
+			continue // no temp directory yet, or the bucket was just deleted
 		}
-		if d.IsDir() {
-			return nil
-		}
-
-		name := d.Name()
-		if !strings.Contains(name, ".tmp.") {
-			return nil
-		}
-
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		if info.ModTime().Before(cutoff) {
-			if os.Remove(path) == nil {
-				cleaned++
+		for _, entry := range entries {
+			info, err := entry.Info()
+			if err != nil || entry.IsDir() {
+				continue
+			}
+			if info.ModTime().Before(cutoff) {
+				if os.Remove(filepath.Join(tmpDir, entry.Name())) == nil {
+					cleaned++
+				}
 			}
 		}
-		return nil
-	})
-
-	if err != nil && !os.IsNotExist(err) {
-		return cleaned, fmt.Errorf("walking buckets directory: %w", err)
 	}
 	return cleaned, nil
 }

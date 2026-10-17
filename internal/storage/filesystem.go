@@ -281,8 +281,35 @@ func (fs *FilesystemStorage) CreateBucket(name string) error {
 	if err := os.MkdirAll(bucketPath, 0700); err != nil {
 		return fmt.Errorf("creating bucket directory: %w", err)
 	}
+	if err := os.Mkdir(fs.bucketTmpDir(name), 0700); err != nil && !os.IsExist(err) {
+		return fmt.Errorf("creating bucket temp directory: %w", err)
+	}
 
 	return nil
+}
+
+// bucketTmpDir returns the directory where writes to a bucket keep their
+// temp files until they are renamed into the object directory. Keeping them
+// in one directory per bucket, on the same filesystem as the objects, lets
+// CleanupStaleTempFiles find leftovers without walking the whole bucket.
+// The bucket name is cleaned as a rooted path, as in keyToPath.
+func (fs *FilesystemStorage) bucketTmpDir(bucket string) string {
+	return filepath.Join(fs.basePath, "buckets", filepath.Clean("/"+bucket), "tmp")
+}
+
+// newTempFilePaths returns paths for the data and metadata temp files of a
+// write to a bucket, creating the bucket's temp directory if needed (buckets
+// created before it existed get it on their first write)
+func (fs *FilesystemStorage) newTempFilePaths(bucket string) (dataTmpPath, metaTmpPath string, err error) {
+	dir := fs.bucketTmpDir(bucket)
+	if err := os.Mkdir(dir, 0700); err != nil && !os.IsExist(err) {
+		if isMissingDirError(err) {
+			return "", "", ErrBucketNotFound
+		}
+		return "", "", fmt.Errorf("creating bucket temp directory: %w", err)
+	}
+	id := uuid.New().String()
+	return filepath.Join(dir, id+".data"), filepath.Join(dir, id+".meta"), nil
 }
 
 // BucketExists checks if a bucket exists
@@ -369,6 +396,12 @@ func (fs *FilesystemStorage) DeleteBucket(name string) error {
 		}
 		return fmt.Errorf("removing objects directory: %w", err)
 	}
+	// Only leftovers of interrupted writes can be in the temp directory: a
+	// write in progress has created its object directory, which keeps the
+	// objects directory from being removed.
+	if err := os.RemoveAll(fs.bucketTmpDir(name)); err != nil {
+		return fmt.Errorf("removing bucket temp directory: %w", err)
+	}
 	if err := os.Remove(bucketPath); err != nil {
 		return fmt.Errorf("removing bucket directory: %w", err)
 	}
@@ -382,8 +415,6 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 	if err != nil {
 		return nil, err
 	}
-	dataPath := filepath.Join(objPath, "data")
-	metaPath := filepath.Join(objPath, "meta.json")
 
 	// Create object directory
 	if err := createObjectDir(objPath); err != nil {
@@ -404,10 +435,12 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 		return nil, fmt.Errorf("%w: path escapes base directory via symlink", ErrInvalidKey)
 	}
 
-	// Write data to a temp file first, then rename
-	// Use unique temp file name to avoid conflicts with concurrent writes to same key
-	tmpID := uuid.New().String()
-	tmpPath := dataPath + ".tmp." + tmpID
+	// Write data to a temp file first, then rename. Each write has its own
+	// temp files, so concurrent writes to the same key do not conflict.
+	tmpPath, metaTmpPath, err := fs.newTempFilePaths(bucket)
+	if err != nil {
+		return nil, err
+	}
 	tmpFile, err := os.Create(tmpPath)
 	if err != nil {
 		return nil, fmt.Errorf("creating temp file: %w", err)
@@ -443,7 +476,6 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 		ChecksumSHA256: EncodeChecksum(sum),
 	}
 
-	metaTmpPath := metaPath + ".tmp." + tmpID
 	if err := writeJSONFile(metaTmpPath, objMeta); err != nil {
 		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("writing metadata: %w", err)
