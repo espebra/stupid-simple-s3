@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"testing"
@@ -236,6 +237,46 @@ func TestAWSSDK_GetBucketLocation(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("expected error for non-existent bucket")
+	}
+}
+
+// TestAWSSDK_ListMultipartUploads tests listing in-progress multipart uploads,
+// including pagination with the SDK's paginator
+func TestAWSSDK_ListMultipartUploads(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	ctx := context.Background()
+	client := ts.AWSClient(ctx)
+
+	want := map[string]string{}
+	for _, key := range []string{"uploads/one", "uploads/two", "uploads/three"} {
+		result, err := client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+			Bucket: aws.String(TestBucket),
+			Key:    aws.String(key),
+		})
+		if err != nil {
+			t.Fatalf("CreateMultipartUpload failed: %v", err)
+		}
+		want[aws.ToString(result.UploadId)] = key
+	}
+
+	got := map[string]string{}
+	paginator := s3.NewListMultipartUploadsPaginator(client, &s3.ListMultipartUploadsInput{
+		Bucket:     aws.String(TestBucket),
+		MaxUploads: aws.Int32(2),
+	})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			t.Fatalf("ListMultipartUploads failed: %v", err)
+		}
+		for _, u := range page.Uploads {
+			got[aws.ToString(u.UploadId)] = aws.ToString(u.Key)
+		}
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("uploads = %v, want %v", got, want)
 	}
 }
 

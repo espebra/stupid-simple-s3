@@ -9,8 +9,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -871,6 +874,95 @@ func TestGetBucket(t *testing.T) {
 		if result.Value != "" {
 			t.Errorf("LocationConstraint = %q, want empty (us-east-1)", result.Value)
 		}
+	})
+}
+
+func TestListMultipartUploads(t *testing.T) {
+	handlers, store, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	if err := store.CreateBucket("other-bucket"); err != nil {
+		t.Fatalf("CreateBucket failed: %v", err)
+	}
+	if _, err := store.CreateMultipartUpload("other-bucket", "a/one", "", nil); err != nil {
+		t.Fatalf("CreateMultipartUpload failed: %v", err)
+	}
+	// Two uploads for a/one, so pagination has to split uploads of one key
+	var want []string
+	for _, key := range []string{"a/one", "a/one", "a/two", "b/three"} {
+		uploadID, err := store.CreateMultipartUpload("test-bucket", key, "", nil)
+		if err != nil {
+			t.Fatalf("CreateMultipartUpload failed: %v", err)
+		}
+		want = append(want, key+" "+uploadID)
+	}
+	sort.Strings(want)
+	if _, err := store.PutObject("test-bucket", "committed", "", nil, strings.NewReader("data")); err != nil {
+		t.Fatalf("PutObject failed: %v", err)
+	}
+
+	list := func(t *testing.T, query string) s3.ListMultipartUploadsResult {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/test-bucket?uploads"+query, nil)
+		req.SetPathValue("bucket", "test-bucket")
+		w := httptest.NewRecorder()
+		handlers.GetBucket(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusOK, w.Body.String())
+		}
+		var result s3.ListMultipartUploadsResult
+		if err := xml.NewDecoder(w.Body).Decode(&result); err != nil {
+			t.Fatalf("failed to decode ListMultipartUploadsResult: %v", err)
+		}
+		return result
+	}
+	names := func(uploads []s3.MultipartUpload) []string {
+		var out []string
+		for _, u := range uploads {
+			out = append(out, u.Key+" "+u.UploadID)
+		}
+		return out
+	}
+
+	t.Run("lists uploads in the bucket only", func(t *testing.T) {
+		result := list(t, "")
+		if got := names(result.Uploads); !slices.Equal(got, want) {
+			t.Errorf("uploads = %v, want %v", got, want)
+		}
+		if result.IsTruncated {
+			t.Error("IsTruncated = true, want false")
+		}
+	})
+
+	t.Run("prefix", func(t *testing.T) {
+		result := list(t, "&prefix=a/")
+		if got := names(result.Uploads); !slices.Equal(got, want[:3]) {
+			t.Errorf("uploads = %v, want %v", got, want[:3])
+		}
+	})
+
+	t.Run("pagination", func(t *testing.T) {
+		var got []string
+		query := "&max-uploads=1"
+		for range len(want) + 1 {
+			result := list(t, query)
+			got = append(got, names(result.Uploads)...)
+			if !result.IsTruncated {
+				break
+			}
+			query = "&max-uploads=1&key-marker=" + url.QueryEscape(result.NextKeyMarker) + "&upload-id-marker=" + result.NextUploadIDMarker
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("paginated uploads = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("invalid max-uploads", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test-bucket?uploads&max-uploads=abc", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		w := httptest.NewRecorder()
+		handlers.GetBucket(w, req)
+		assertErrorCode(t, w, http.StatusBadRequest, s3.ErrInvalidArgument)
 	})
 }
 

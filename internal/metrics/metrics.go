@@ -134,6 +134,7 @@ const (
 	OpAbortMultipartUpload    = "AbortMultipartUpload"
 	OpListObjects             = "ListObjects"
 	OpGetBucketLocation       = "GetBucketLocation"
+	OpListMultipartUploads    = "ListMultipartUploads"
 	OpCopyObject              = "CopyObject"
 	OpDeleteObjects           = "DeleteObjects"
 	OpUnknown                 = "Unknown"

@@ -961,6 +961,10 @@ func (h *Handlers) GetBucket(w http.ResponseWriter, r *http.Request) {
 		h.GetBucketLocation(w, r)
 		return
 	}
+	if query.Has("uploads") {
+		h.ListMultipartUploads(w, r)
+		return
+	}
 
 	// ListObjectsV2 (list-type=2) or ListObjects (no list-type)
 	if query.Get("list-type") == "2" {
@@ -977,6 +981,75 @@ func (h *Handlers) GetBucket(w http.ResponseWriter, r *http.Request) {
 // read as us-east-1.
 func (h *Handlers) GetBucketLocation(w http.ResponseWriter, r *http.Request) {
 	result := s3.LocationConstraint{Xmlns: "http://s3.amazonaws.com/doc/2006-03-01/"}
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_ = xml.NewEncoder(w).Encode(result)
+}
+
+// maxUploadsLimit is the maximum number of uploads returned by ListMultipartUploads
+const maxUploadsLimit = 1000
+
+// ListMultipartUploads handles GET /{bucket}?uploads. It supports prefix,
+// key-marker, upload-id-marker and max-uploads; delimiter is not supported
+// and is ignored.
+func (h *Handlers) ListMultipartUploads(w http.ResponseWriter, r *http.Request) {
+	bucket := r.PathValue("bucket")
+	query := r.URL.Query()
+	prefix := query.Get("prefix")
+	keyMarker := query.Get("key-marker")
+	uploadIDMarker := query.Get("upload-id-marker")
+	if keyMarker == "" {
+		// S3 ignores upload-id-marker without key-marker
+		uploadIDMarker = ""
+	}
+
+	maxUploads := maxUploadsLimit
+	if v := query.Get("max-uploads"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
+			return
+		}
+		maxUploads = min(n, maxUploadsLimit)
+	}
+
+	uploads, err := h.storage.ListMultipartUploads(bucket, prefix)
+	if err != nil {
+		slog.Error("failed to list multipart uploads", "error", err, "bucket", bucket, "request_id", GetRequestID(r))
+		s3.WriteErrorResponse(w, s3.ErrInternalError)
+		return
+	}
+
+	result := s3.ListMultipartUploadsResult{
+		Xmlns:          "http://s3.amazonaws.com/doc/2006-03-01/",
+		Bucket:         bucket,
+		KeyMarker:      keyMarker,
+		UploadIDMarker: uploadIDMarker,
+		Prefix:         prefix,
+		MaxUploads:     maxUploads,
+	}
+	for _, u := range uploads {
+		// Skip uploads up to and including the markers
+		if keyMarker != "" && (u.Key < keyMarker || (u.Key == keyMarker && (uploadIDMarker == "" || u.UploadID <= uploadIDMarker))) {
+			continue
+		}
+		if len(result.Uploads) == maxUploads {
+			result.IsTruncated = true
+			break
+		}
+		result.Uploads = append(result.Uploads, s3.MultipartUpload{
+			Key:          u.Key,
+			UploadID:     u.UploadID,
+			StorageClass: "STANDARD",
+			Initiated:    u.Created,
+		})
+	}
+	if result.IsTruncated && len(result.Uploads) > 0 {
+		last := result.Uploads[len(result.Uploads)-1]
+		result.NextKeyMarker = last.Key
+		result.NextUploadIDMarker = last.UploadID
+	}
+
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusOK)
 	_ = xml.NewEncoder(w).Encode(result)

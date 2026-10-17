@@ -91,4 +91,8 @@ type MultipartStorage interface {
 
 	// CountActiveUploads returns the number of active multipart uploads
 	CountActiveUploads() int
+
+	// ListMultipartUploads returns the in-progress multipart uploads in a
+	// bucket whose keys start with prefix, sorted by key and then upload ID
+	ListMultipartUploads(bucket, prefix string) ([]s3.MultipartUploadMetadata, error)
 }

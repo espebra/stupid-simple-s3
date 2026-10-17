@@ -344,6 +344,9 @@ func detectOperation(r *http.Request) string {
 		if strings.Count(r.URL.Path, "/") == 1 && query.Has("location") {
 			return metrics.OpGetBucketLocation
 		}
+		if strings.Count(r.URL.Path, "/") == 1 && query.Has("uploads") {
+			return metrics.OpListMultipartUploads
+		}
 		return metrics.OpGetObject
 
 	case "PUT":
