@@ -411,12 +411,6 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 		return nil, fmt.Errorf("closing temp file: %w", err)
 	}
 
-	// Rename temp file to final location
-	if err := os.Rename(tmpPath, dataPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return nil, fmt.Errorf("renaming temp file: %w", err)
-	}
-
 	// Create metadata
 	now := time.Now().UTC()
 
@@ -431,32 +425,14 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 		ChecksumSHA256: EncodeChecksum(sum),
 	}
 
-	// Write metadata atomically using temp file and rename
-	// If metadata write fails, roll back the data file to maintain consistency
 	metaTmpPath := metaPath + ".tmp." + tmpID
-	metaFile, err := os.Create(metaTmpPath)
-	if err != nil {
-		_ = os.Remove(dataPath) // Roll back data file
-		return nil, fmt.Errorf("creating metadata file: %w", err)
-	}
-
-	if err := json.NewEncoder(metaFile).Encode(objMeta); err != nil {
-		_ = metaFile.Close()
-		_ = os.Remove(metaTmpPath)
-		_ = os.Remove(dataPath) // Roll back data file
+	if err := writeJSONFile(metaTmpPath, objMeta); err != nil {
+		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("writing metadata: %w", err)
 	}
 
-	if err := metaFile.Close(); err != nil {
-		_ = os.Remove(metaTmpPath)
-		_ = os.Remove(dataPath) // Roll back data file
-		return nil, fmt.Errorf("closing metadata file: %w", err)
-	}
-
-	if err := os.Rename(metaTmpPath, metaPath); err != nil {
-		_ = os.Remove(metaTmpPath)
-		_ = os.Remove(dataPath) // Roll back data file
-		return nil, fmt.Errorf("renaming metadata file: %w", err)
+	if err := fs.commitObject(objPath, tmpPath, metaTmpPath); err != nil {
+		return nil, err
 	}
 
 	return objMeta, nil
@@ -513,6 +489,30 @@ func (fs *FilesystemStorage) HeadObject(bucket, key string) (*s3.ObjectMetadata,
 	return &meta, nil
 }
 
+// commitObject moves an object's data and metadata temp files into place.
+// Both renames happen under the object's commit lock, so concurrent writes
+// to the same key cannot interleave and leave the data of one write with
+// the metadata of another. If the metadata cannot be renamed, the data file
+// is removed as well.
+func (fs *FilesystemStorage) commitObject(objPath, dataTmpPath, metaTmpPath string) error {
+	commit := fs.commitLock(objPath)
+	commit.Lock()
+	defer commit.Unlock()
+
+	dataPath := filepath.Join(objPath, "data")
+	if err := os.Rename(dataTmpPath, dataPath); err != nil {
+		_ = os.Remove(dataTmpPath)
+		_ = os.Remove(metaTmpPath)
+		return fmt.Errorf("renaming data file: %w", err)
+	}
+	if err := os.Rename(metaTmpPath, filepath.Join(objPath, "meta.json")); err != nil {
+		_ = os.Remove(metaTmpPath)
+		_ = os.Remove(dataPath)
+		return fmt.Errorf("renaming metadata file: %w", err)
+	}
+	return nil
+}
+
 // DeleteObject removes an object by key
 func (fs *FilesystemStorage) DeleteObject(bucket, key string) error {
 	objPath, err := fs.keyToPath(bucket, key)
@@ -520,8 +520,12 @@ func (fs *FilesystemStorage) DeleteObject(bucket, key string) error {
 		return err
 	}
 
-	// Remove the entire object directory
+	// Remove the entire object directory. The commit lock keeps the removal
+	// from landing between the data and metadata renames of a write.
+	commit := fs.commitLock(objPath)
+	commit.Lock()
 	err = os.RemoveAll(objPath)
+	commit.Unlock()
 	if err != nil {
 		return fmt.Errorf("removing object: %w", err)
 	}

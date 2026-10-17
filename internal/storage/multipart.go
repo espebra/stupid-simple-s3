@@ -290,11 +290,6 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 		return nil, fmt.Errorf("closing output file: %w", err)
 	}
 
-	if err := os.Rename(tmpPath, dataPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return nil, fmt.Errorf("renaming output file: %w", err)
-	}
-
 	// Create object metadata
 	now := time.Now().UTC()
 	compositeSum := compositeHash.Sum(nil)
@@ -308,29 +303,15 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 		ChecksumSHA256: fmt.Sprintf("%s-%d", EncodeChecksum(compositeSum), len(parts)),
 	}
 
-	// Write metadata atomically using temp file and rename
-	metaPath := filepath.Join(objPath, "meta.json")
-	// uploadID is a validated UUID, so the temp file stays next to metaPath.
-	metaTmpPath := metaPath + ".tmp." + uploadID
-	metaFile, err := os.Create(metaTmpPath)
-	if err != nil {
-		return nil, fmt.Errorf("creating metadata file: %w", err)
-	}
-
-	if err := json.NewEncoder(metaFile).Encode(objMeta); err != nil {
-		_ = metaFile.Close()
-		_ = os.Remove(metaTmpPath)
+	// uploadID is a validated UUID, so the temp file stays next to meta.json.
+	metaTmpPath := filepath.Join(objPath, "meta.json.tmp."+uploadID)
+	if err := writeJSONFile(metaTmpPath, objMeta); err != nil {
+		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("writing metadata: %w", err)
 	}
 
-	if err := metaFile.Close(); err != nil {
-		_ = os.Remove(metaTmpPath)
-		return nil, fmt.Errorf("closing metadata file: %w", err)
-	}
-
-	if err := os.Rename(metaTmpPath, metaPath); err != nil {
-		_ = os.Remove(metaTmpPath)
-		return nil, fmt.Errorf("renaming metadata file: %w", err)
+	if err := fs.commitObject(objPath, tmpPath, metaTmpPath); err != nil {
+		return nil, err
 	}
 
 	// Clean up multipart upload directory
