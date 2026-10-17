@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/btree"
+	"github.com/espebra/btree"
 
 	"github.com/espen/stupid-simple-s3/internal/s3"
 )

@@ -12,13 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build go1.18
-// +build go1.18
-
-// In Go 1.18 and beyond, a BTreeG generic is created, and BTree is a specific
-// instantiation of that generic for the Item interface, with a backwards-
-// compatible API.  Before go1.18, generics are not supported,
-// and BTree is just an implementation based around the Item interface.
+// BTreeG is the generic B-Tree implementation, and BTree is a specific
+// instantiation of it for the Item interface, with the API this package had
+// before generics.
 
 // Package btree implements in-memory B-Trees of arbitrary degree.
 //
@@ -28,7 +24,9 @@
 // It has a flatter structure than an equivalent red-black or other binary tree,
 // which in some cases yields better memory usage and/or performance.
 // See some discussion on the matter here:
-//   http://google-opensource.blogspot.com/2013/01/c-containers-that-save-memory-and-time.html
+//
+//	http://google-opensource.blogspot.com/2013/01/c-containers-that-save-memory-and-time.html
+//
 // Note, though, that this project is in no way related to the C++ B-Tree
 // implementation written about there.
 //
@@ -36,13 +34,14 @@
 // slice of children.  For basic numeric values or raw structs, this can cause
 // efficiency differences when compared to equivalent C++ template code that
 // stores values in arrays within the node:
-//   * Due to the overhead of storing values as interfaces (each
+//   - Due to the overhead of storing values as interfaces (each
 //     value needs to be stored as the value itself, then 2 words for the
 //     interface pointing to that value and its type), resulting in higher
 //     memory use.
-//   * Since interfaces can point to values anywhere in memory, values are
+//   - Since interfaces can point to values anywhere in memory, values are
 //     most likely not stored in contiguous blocks, resulting in a higher
 //     number of cache misses.
+//
 // These issues don't tend to matter, though, when working with strings or other
 // heap-allocated structures, since C++-equivalent structures also must store
 // pointers and also distribute their values across the heap.
@@ -63,7 +62,6 @@ package btree
 import (
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 	"sync"
 )
@@ -152,9 +150,17 @@ func NewG[T any](degree int, less LessFunc[T]) *BTreeG[T] {
 }
 
 // NewWithFreeListG creates a new B-Tree that uses the given node free list.
+//
+// A nil free list is replaced with a new one of DefaultFreeListSize.
 func NewWithFreeListG[T any](degree int, less LessFunc[T], f *FreeListG[T]) *BTreeG[T] {
 	if degree <= 1 {
 		panic("bad degree")
+	}
+	if less == nil {
+		panic("nil less func")
+	}
+	if f == nil {
+		f = NewFreeListG[T](DefaultFreeListSize)
 	}
 	return &BTreeG[T]{
 		degree: degree,
@@ -170,9 +176,7 @@ type items[T any] []T
 func (s *items[T]) insertAt(index int, item T) {
 	var zero T
 	*s = append(*s, zero)
-	if index < len(*s) {
-		copy((*s)[index+1:], (*s)[index:])
-	}
+	copy((*s)[index+1:], (*s)[index:])
 	(*s)[index] = item
 }
 
@@ -212,9 +216,18 @@ func (s *items[T]) truncate(index int) {
 // list.  'found' is true if the item already exists in the list at the given
 // index.
 func (s items[T]) find(item T, less func(T, T) bool) (index int, found bool) {
-	i := sort.Search(len(s), func(i int) bool {
-		return less(item, s[i])
-	})
+	// This is sort.Search specialised by hand: the comparison is a direct
+	// call to less rather than an indirect call through a closure, and
+	// find is the hottest function in the package.
+	i, j := 0, len(s)
+	for i < j {
+		h := int(uint(i+j) >> 1)
+		if less(item, s[h]) {
+			j = h
+		} else {
+			i = h + 1
+		}
+	}
 	if i > 0 && !less(s[i-1], item) {
 		return i - 1, true
 	}
@@ -224,8 +237,8 @@ func (s items[T]) find(item T, less func(T, T) bool) (index int, found bool) {
 // node is an internal node in a tree.
 //
 // It must at all times maintain the invariant that either
-//   * len(children) == 0, len(items) unconstrained
-//   * len(children) == len(items) + 1
+//   - len(children) == 0, len(items) unconstrained
+//   - len(children) == len(items) + 1
 type node[T any] struct {
 	items    items[T]
 	children items[*node[T]]
@@ -265,9 +278,17 @@ func (n *node[T]) mutableChild(i int) *node[T] {
 func (n *node[T]) split(i int) (T, *node[T]) {
 	item := n.items[i]
 	next := n.cow.newNode()
+	// n is full, so give next the same capacity; otherwise it would have to
+	// be reallocated and copied as soon as it grows past half full.
+	if cap(next.items) < cap(n.items) {
+		next.items = make(items[T], 0, cap(n.items))
+	}
 	next.items = append(next.items, n.items[i+1:]...)
 	n.items.truncate(i)
 	if len(n.children) > 0 {
+		if cap(next.children) < cap(n.children) {
+			next.children = make(items[*node[T]], 0, cap(n.children))
+		}
 		next.children = append(next.children, n.children[i+1:]...)
 		n.children.truncate(i + 1)
 	}
@@ -319,13 +340,17 @@ func (n *node[T]) insert(item T, maxItems int) (_ T, _ bool) {
 
 // get finds the given key in the subtree and returns it.
 func (n *node[T]) get(key T) (_ T, _ bool) {
-	i, found := n.items.find(key, n.cow.less)
-	if found {
-		return n.items[i], true
-	} else if len(n.children) > 0 {
-		return n.children[i].get(key)
+	less := n.cow.less
+	for {
+		i, found := n.items.find(key, less)
+		if found {
+			return n.items[i], true
+		}
+		if len(n.children) == 0 {
+			return
+		}
+		n = n.children[i]
 	}
-	return
 }
 
 // min returns the first item in the subtree.
@@ -420,15 +445,20 @@ func (n *node[T]) remove(item T, minItems int, typ toRemove) (_ T, _ bool) {
 // remove it.
 //
 // Most documentation says we have to do two sets of special casing:
-//   1) item is in this node
-//   2) item is in child
+//  1. item is in this node
+//  2. item is in child
+//
 // In both cases, we need to handle the two subcases:
-//   A) node has enough values that it can spare one
-//   B) node doesn't have enough values
+//
+//	A) node has enough values that it can spare one
+//	B) node doesn't have enough values
+//
 // For the latter, we have to check:
-//   a) left sibling has node to spare
-//   b) right sibling has node to spare
-//   c) we must merge
+//
+//	a) left sibling has node to spare
+//	b) right sibling has node to spare
+//	c) we must merge
+//
 // To simplify our code here, we handle cases #1 and #2 the same:
 // If a node doesn't have enough items, we make sure it does (using a,b,c).
 // We then simply redo our remove call, and the second time (regardless of
@@ -497,72 +527,139 @@ func empty[T any]() optionalItem[T] {
 // will force the iterator to include the first item when it equals 'start',
 // thus creating a "greaterOrEqual" or "lessThanEqual" rather than just a
 // "greaterThan" or "lessThan" queries.
-func (n *node[T]) iterate(dir direction, start, stop optionalItem[T], includeStart bool, hit bool, iter ItemIteratorG[T]) (bool, bool) {
-	var ok, found bool
-	var index int
+//
+// It returns false if iteration should stop (the iterator returned false).
+//
+// Because a node's items are sorted, a single binary search per bound locates
+// the in-range items [lo, hi) and tells us which children lie entirely within
+// the range.  Only the children at the boundaries can straddle a bound, so
+// only they are passed the bound to check; all other children, and all items
+// in [lo, hi), are visited with no per-item comparisons at all.
+func (n *node[T]) iterate(dir direction, start, stop optionalItem[T], includeStart bool, iter ItemIteratorG[T]) bool {
+	less := n.cow.less
+	lo, hi := 0, len(n.items)
 	switch dir {
 	case ascend:
+		// Visit order: children[lo], items[lo], children[lo+1], ..., items[hi-1], children[hi].
+		visitFirstChild := true
 		if start.valid {
-			index, _ = n.items.find(start.item, n.cow.less)
+			idx, found := n.items.find(start.item, less)
+			lo = idx // items[lo:] are >= start
+			if found {
+				// items[idx] == start.  children[idx] holds items < start and
+				// children[idx+1] holds items > start, so no child needs to
+				// check the start bound.
+				if includeStart {
+					visitFirstChild = false
+				} else {
+					lo++
+				}
+				start = empty[T]()
+			}
 		}
-		for i := index; i < len(n.items); i++ {
-			if len(n.children) > 0 {
-				if hit, ok = n.children[i].iterate(dir, start, stop, includeStart, hit, iter); !ok {
-					return hit, false
+		if stop.valid {
+			hi, _ = n.items.find(stop.item, less) // items[:hi] are < stop
+		}
+		if hi < lo {
+			// items[lo-1] >= stop, so children[lo] is out of range too.
+			return true
+		}
+		if len(n.children) == 0 {
+			for i := lo; i < hi; i++ {
+				if !iter(n.items[i]) {
+					return false
 				}
 			}
-			if !includeStart && !hit && start.valid && !n.cow.less(start.item, n.items[i]) {
-				hit = true
-				continue
+			return true
+		}
+		if visitFirstChild {
+			// children[lo] may contain items below start, and, if it is also
+			// children[hi], items at or above stop.
+			cstop := empty[T]()
+			if lo == hi {
+				cstop = stop
 			}
-			hit = true
-			if stop.valid && !n.cow.less(n.items[i], stop.item) {
-				return hit, false
-			}
-			if !iter(n.items[i]) {
-				return hit, false
+			if !n.children[lo].iterate(dir, start, cstop, includeStart, iter) {
+				return false
 			}
 		}
-		if len(n.children) > 0 {
-			if hit, ok = n.children[len(n.children)-1].iterate(dir, start, stop, includeStart, hit, iter); !ok {
-				return hit, false
+		for i := lo; i < hi; i++ {
+			if !iter(n.items[i]) {
+				return false
+			}
+			// children[i+1] holds items > items[i] >= start.  Only children[hi]
+			// may contain items at or above stop.
+			cstop := empty[T]()
+			if i+1 == hi {
+				cstop = stop
+			}
+			if !n.children[i+1].iterate(dir, empty[T](), cstop, includeStart, iter) {
+				return false
 			}
 		}
 	case descend:
+		// Visit order: children[hi], items[hi-1], children[hi-1], ..., items[lo], children[lo].
+		visitFirstChild := true
 		if start.valid {
-			index, found = n.items.find(start.item, n.cow.less)
-			if !found {
-				index = index - 1
+			idx, found := n.items.find(start.item, less)
+			hi = idx // items[:hi] are < start
+			if found {
+				// items[idx] == start.  children[idx] holds items < start and
+				// children[idx+1] holds items > start, so no child needs to
+				// check the start bound.
+				if includeStart {
+					hi++
+					visitFirstChild = false
+				}
+				start = empty[T]()
 			}
-		} else {
-			index = len(n.items) - 1
 		}
-		for i := index; i >= 0; i-- {
-			if start.valid && !n.cow.less(n.items[i], start.item) {
-				if !includeStart || hit || n.cow.less(start.item, n.items[i]) {
-					continue
+		if stop.valid {
+			idx, found := n.items.find(stop.item, less)
+			lo = idx // items[lo:] are >= stop
+			if found {
+				lo++ // items[lo:] are > stop
+			}
+		}
+		if hi < lo {
+			// items[lo-1] is at or beyond start, so children[lo] is out of range too.
+			return true
+		}
+		if len(n.children) == 0 {
+			for i := hi - 1; i >= lo; i-- {
+				if !iter(n.items[i]) {
+					return false
 				}
 			}
-			if len(n.children) > 0 {
-				if hit, ok = n.children[i+1].iterate(dir, start, stop, includeStart, hit, iter); !ok {
-					return hit, false
-				}
+			return true
+		}
+		if visitFirstChild {
+			// children[hi] may contain items above start, and, if it is also
+			// children[lo], items at or below stop.
+			cstop := empty[T]()
+			if lo == hi {
+				cstop = stop
 			}
-			if stop.valid && !n.cow.less(stop.item, n.items[i]) {
-				return hit, false //	continue
+			if !n.children[hi].iterate(dir, start, cstop, includeStart, iter) {
+				return false
 			}
-			hit = true
+		}
+		for i := hi - 1; i >= lo; i-- {
 			if !iter(n.items[i]) {
-				return hit, false
+				return false
 			}
-		}
-		if len(n.children) > 0 {
-			if hit, ok = n.children[0].iterate(dir, start, stop, includeStart, hit, iter); !ok {
-				return hit, false
+			// children[i] holds items < items[i] <= start.  Only children[lo]
+			// may contain items at or below stop.
+			cstop := empty[T]()
+			if i == lo {
+				cstop = stop
+			}
+			if !n.children[i].iterate(dir, empty[T](), cstop, includeStart, iter) {
+				return false
 			}
 		}
 	}
-	return hit, true
+	return true
 }
 
 // print is used for testing/debugging purposes.
@@ -587,8 +684,15 @@ type BTreeG[T any] struct {
 	cow    *copyOnWriteContext[T]
 }
 
-// LessFunc[T] determines how to order a type 'T'.  It should implement a strict
-// ordering, and should return true if within that ordering, 'a' < 'b'.
+// LessFunc[T] determines how to order a type 'T'.  It must implement a strict
+// weak ordering, and should return true if within that ordering, 'a' < 'b'.
+// If !less(a, b) && !less(b, a), a and b are treated as equal, and only one of
+// them can be held in the tree.
+//
+// The tree relies on the ordering being consistent: an inconsistent LessFunc
+// (one for which both less(a, b) and less(b, a) can be true, or whose result
+// changes while an item is in the tree) corrupts the tree, and can cause
+// unbounded recursion on Delete.
 type LessFunc[T any] func(a, b T) bool
 
 // copyOnWriteContext pointers determine node ownership... a tree with a write
@@ -627,11 +731,14 @@ func (t *BTreeG[T]) Clone() (t2 *BTreeG[T]) {
 	//   the original, shared nodes (old b.cow)
 	//   the new b.cow nodes
 	//   the new out.cow nodes
-	cow1, cow2 := *t.cow, *t.cow
-	out := *t
-	t.cow = &cow1
-	out.cow = &cow2
-	return &out
+	// Both contexts are allocated together, halving the allocations per Clone.
+	cows := new([2]copyOnWriteContext[T])
+	cows[0], cows[1] = *t.cow, *t.cow
+	t2 = new(BTreeG[T])
+	*t2 = *t
+	t.cow = &cows[0]
+	t2.cow = &cows[1]
+	return t2
 }
 
 // maxItems returns the max number of items to allow per node.
@@ -681,8 +788,6 @@ func (c *copyOnWriteContext[T]) freeNode(n *node[T]) freeType {
 // ReplaceOrInsert adds the given item to the tree.  If an item in the tree
 // already equals the given one, it is removed from the tree and returned,
 // and the second return value is true.  Otherwise, (zeroValue, false)
-//
-// nil cannot be added to the tree (will panic).
 func (t *BTreeG[T]) ReplaceOrInsert(item T) (_ T, _ bool) {
 	if t.root == nil {
 		t.root = t.cow.newNode()
@@ -749,7 +854,7 @@ func (t *BTreeG[T]) AscendRange(greaterOrEqual, lessThan T, iterator ItemIterato
 	if t.root == nil {
 		return
 	}
-	t.root.iterate(ascend, optional[T](greaterOrEqual), optional[T](lessThan), true, false, iterator)
+	t.root.iterate(ascend, optional[T](greaterOrEqual), optional[T](lessThan), true, iterator)
 }
 
 // AscendLessThan calls the iterator for every value in the tree within the range
@@ -758,7 +863,7 @@ func (t *BTreeG[T]) AscendLessThan(pivot T, iterator ItemIteratorG[T]) {
 	if t.root == nil {
 		return
 	}
-	t.root.iterate(ascend, empty[T](), optional(pivot), false, false, iterator)
+	t.root.iterate(ascend, empty[T](), optional(pivot), false, iterator)
 }
 
 // AscendGreaterOrEqual calls the iterator for every value in the tree within
@@ -767,7 +872,7 @@ func (t *BTreeG[T]) AscendGreaterOrEqual(pivot T, iterator ItemIteratorG[T]) {
 	if t.root == nil {
 		return
 	}
-	t.root.iterate(ascend, optional[T](pivot), empty[T](), true, false, iterator)
+	t.root.iterate(ascend, optional[T](pivot), empty[T](), true, iterator)
 }
 
 // Ascend calls the iterator for every value in the tree within the range
@@ -776,7 +881,7 @@ func (t *BTreeG[T]) Ascend(iterator ItemIteratorG[T]) {
 	if t.root == nil {
 		return
 	}
-	t.root.iterate(ascend, empty[T](), empty[T](), false, false, iterator)
+	t.root.iterate(ascend, empty[T](), empty[T](), false, iterator)
 }
 
 // DescendRange calls the iterator for every value in the tree within the range
@@ -785,7 +890,7 @@ func (t *BTreeG[T]) DescendRange(lessOrEqual, greaterThan T, iterator ItemIterat
 	if t.root == nil {
 		return
 	}
-	t.root.iterate(descend, optional[T](lessOrEqual), optional[T](greaterThan), true, false, iterator)
+	t.root.iterate(descend, optional[T](lessOrEqual), optional[T](greaterThan), true, iterator)
 }
 
 // DescendLessOrEqual calls the iterator for every value in the tree within the range
@@ -794,7 +899,7 @@ func (t *BTreeG[T]) DescendLessOrEqual(pivot T, iterator ItemIteratorG[T]) {
 	if t.root == nil {
 		return
 	}
-	t.root.iterate(descend, optional[T](pivot), empty[T](), true, false, iterator)
+	t.root.iterate(descend, optional[T](pivot), empty[T](), true, iterator)
 }
 
 // DescendGreaterThan calls the iterator for every value in the tree within
@@ -803,7 +908,7 @@ func (t *BTreeG[T]) DescendGreaterThan(pivot T, iterator ItemIteratorG[T]) {
 	if t.root == nil {
 		return
 	}
-	t.root.iterate(descend, empty[T](), optional[T](pivot), false, false, iterator)
+	t.root.iterate(descend, empty[T](), optional[T](pivot), false, iterator)
 }
 
 // Descend calls the iterator for every value in the tree within the range
@@ -812,7 +917,7 @@ func (t *BTreeG[T]) Descend(iterator ItemIteratorG[T]) {
 	if t.root == nil {
 		return
 	}
-	t.root.iterate(descend, empty[T](), empty[T](), false, false, iterator)
+	t.root.iterate(descend, empty[T](), empty[T](), false, iterator)
 }
 
 // Get looks for the key item in the tree, returning it.  It returns
@@ -858,13 +963,13 @@ func (t *BTreeG[T]) Len() int {
 // one, instead of being lost to the garbage collector.
 //
 // This call takes:
-//   O(1): when addNodesToFreelist is false, this is a single operation.
-//   O(1): when the freelist is already full, it breaks out immediately
-//   O(freelist size):  when the freelist is empty and the nodes are all owned
-//       by this tree, nodes are added to the freelist until full.
-//   O(tree size):  when all nodes are owned by another tree, all nodes are
-//       iterated over looking for nodes to add to the freelist, and due to
-//       ownership, none are.
+//
+//	O(1): when addNodesToFreelist is false, this is a single operation.
+//	O(1): when the freelist is already full, it breaks out immediately
+//	O(freelist size):  when the freelist is empty and the nodes are all owned
+//	    by this tree, nodes are added to the freelist until full.
+//	O(1): when the root is owned by another tree (e.g. an unmodified Clone),
+//	    since then no node in the tree is owned by this one.
 func (t *BTreeG[T]) Clear(addNodesToFreelist bool) {
 	if t.root != nil && addNodesToFreelist {
 		t.root.reset(t.cow)
@@ -876,6 +981,11 @@ func (t *BTreeG[T]) Clear(addNodesToFreelist bool) {
 // freelist is full, since the only benefit of iterating is to fill that
 // freelist up.  Returns true if parent reset call should continue.
 func (n *node[T]) reset(c *copyOnWriteContext[T]) bool {
+	if n.cow != c {
+		// Nodes are only ever copied into c beneath a parent already owned by
+		// c, so nothing in this subtree can be owned by c either.
+		return true
+	}
 	for _, child := range n.children {
 		if !child.reset(c) {
 			return false
@@ -1071,13 +1181,13 @@ func (t *BTree) Len() int {
 // one, instead of being lost to the garbage collector.
 //
 // This call takes:
-//   O(1): when addNodesToFreelist is false, this is a single operation.
-//   O(1): when the freelist is already full, it breaks out immediately
-//   O(freelist size):  when the freelist is empty and the nodes are all owned
-//       by this tree, nodes are added to the freelist until full.
-//   O(tree size):  when all nodes are owned by another tree, all nodes are
-//       iterated over looking for nodes to add to the freelist, and due to
-//       ownership, none are.
+//
+//	O(1): when addNodesToFreelist is false, this is a single operation.
+//	O(1): when the freelist is already full, it breaks out immediately
+//	O(freelist size):  when the freelist is empty and the nodes are all owned
+//	    by this tree, nodes are added to the freelist until full.
+//	O(1): when the root is owned by another tree (e.g. an unmodified Clone),
+//	    since then no node in the tree is owned by this one.
 func (t *BTree) Clear(addNodesToFreelist bool) {
 	(*BTreeG[Item])(t).Clear(addNodesToFreelist)
 }

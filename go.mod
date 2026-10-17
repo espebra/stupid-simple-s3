@@ -7,7 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.9
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.3
 	github.com/aws/smithy-go v1.28.5
-	github.com/google/btree v1.1.3
+	github.com/espebra/btree v0.0.0-20261017233452-6104c4c3146c
 	github.com/google/uuid v1.6.0
 	github.com/minio/minio-go/v7 v7.3.0
 	github.com/prometheus/client_golang v1.25.0
@@ -46,5 +46,3 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/ini.v1 v1.67.3 // indirect
 )
-
-replace github.com/google/btree => github.com/espebra/btree v0.0.0-20240821162617-aeba20f7a1e1
