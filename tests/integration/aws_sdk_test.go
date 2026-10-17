@@ -6,6 +6,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -331,6 +332,48 @@ func TestAWSSDK_ListParts(t *testing.T) {
 	}
 	if !maps.Equal(got, want) {
 		t.Errorf("parts = %v, want %v", got, want)
+	}
+}
+
+// TestAWSSDK_ListObjectsV2PaginationWithDelimiter tests that paginating a
+// listing with a delimiter returns every object and common prefix exactly
+// once, including pages that hold only common prefixes
+func TestAWSSDK_ListObjectsV2PaginationWithDelimiter(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	ctx := context.Background()
+	client := ts.AWSClient(ctx)
+
+	for _, key := range []string{"a/1", "a/2", "b/1", "b/2", "c", "d/1", "e"} {
+		if _, err := client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(TestBucket), Key: aws.String(key), Body: strings.NewReader("x")}); err != nil {
+			t.Fatalf("PutObject(%q) failed: %v", key, err)
+		}
+	}
+
+	var got []string
+	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
+		Bucket:    aws.String(TestBucket),
+		Delimiter: aws.String("/"),
+		MaxKeys:   aws.Int32(1),
+	})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			t.Fatalf("ListObjectsV2 failed: %v", err)
+		}
+		if n := len(page.Contents) + len(page.CommonPrefixes); n > 1 || int(aws.ToInt32(page.KeyCount)) != n {
+			t.Errorf("page has %d entries and KeyCount %d, want 1 of each", n, aws.ToInt32(page.KeyCount))
+		}
+		for _, obj := range page.Contents {
+			got = append(got, aws.ToString(obj.Key))
+		}
+		for _, p := range page.CommonPrefixes {
+			got = append(got, aws.ToString(p.Prefix))
+		}
+	}
+	if want := []string{"a/", "b/", "c", "d/", "e"}; !slices.Equal(got, want) {
+		t.Errorf("listed %v, want %v", got, want)
 	}
 }
 
