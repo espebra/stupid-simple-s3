@@ -2,8 +2,10 @@ package api
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -219,4 +221,48 @@ func FuzzAWSChunkedReader(f *testing.F) {
 			}
 		}
 	})
+}
+
+// countingSource counts the bytes read from it
+type countingSource struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingSource) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+func TestAWSChunkedReaderLineTooLong(t *testing.T) {
+	endless := strings.Repeat("f", 10*1024*1024)
+	tests := map[string]string{
+		"chunk header":             endless,
+		"chunk signature":          "5;chunk-signature=" + endless,
+		"line after chunk data":    "5\r\nhello" + endless,
+		"trailer":                  "5\r\nhello\r\n0\r\nx-amz-checksum-sha256:" + endless,
+		"line after final chunk 0": "0\r\n" + endless,
+	}
+	for name, body := range tests {
+		t.Run(name, func(t *testing.T) {
+			src := &countingSource{r: strings.NewReader(body)}
+			_, err := io.ReadAll(newAWSChunkedReader(src, 0))
+			if !errors.Is(err, errChunkLineTooLong) {
+				t.Errorf("err = %v, want errChunkLineTooLong", err)
+			}
+			if src.n > 2*maxChunkLineLength {
+				t.Errorf("read %d bytes of a line without newline, want at most %d", src.n, 2*maxChunkLineLength)
+			}
+		})
+	}
+}
+
+func TestDrainRequestBodyIsBounded(t *testing.T) {
+	src := &countingSource{r: strings.NewReader(strings.Repeat("x", 10*1024*1024))}
+	req := httptest.NewRequest("PUT", "/bucket/key", src)
+	drainRequestBody(req)
+	if src.n > maxDrainBytes+64*1024 {
+		t.Errorf("drained %d bytes, want at most about %d", src.n, maxDrainBytes)
+	}
 }

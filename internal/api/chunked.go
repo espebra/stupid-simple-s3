@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -11,6 +12,15 @@ import (
 
 // maxTrailerLines limits how many trailer lines are accepted after the final chunk
 const maxTrailerLines = 16
+
+// maxChunkLineLength limits chunk header and trailer lines. Real lines, such
+// as "<hex-size>;chunk-signature=<64 hex>" or a checksum trailer, are well
+// under 200 bytes. It is also the size of the read buffer.
+const maxChunkLineLength = 4096
+
+// errChunkLineTooLong is returned when a chunk header or trailer line is
+// longer than maxChunkLineLength
+var errChunkLineTooLong = errors.New("aws-chunked line too long")
 
 // awsChunkedReader decodes AWS chunked transfer encoding
 // Format: <hex-size>;chunk-signature=<sig>\r\n<data>\r\n...0;chunk-signature=<sig>\r\n[<trailers>]\r\n
@@ -28,7 +38,7 @@ type awsChunkedReader struct {
 // newAWSChunkedReader creates a new AWS chunked reader
 func newAWSChunkedReader(r io.Reader, maxChunkSize int64) *awsChunkedReader {
 	return &awsChunkedReader{
-		reader:       bufio.NewReader(r),
+		reader:       bufio.NewReaderSize(r, maxChunkLineLength),
 		maxChunkSize: maxChunkSize,
 	}
 }
@@ -79,7 +89,7 @@ func (r *awsChunkedReader) Read(p []byte) (n int, err error) {
 
 		// If we've read the entire chunk, consume the trailing CRLF
 		if r.remaining == 0 {
-			if _, err := r.reader.ReadString('\n'); err != nil && err != io.EOF {
+			if _, err := r.readLine(); err != nil && err != io.EOF {
 				return n, err
 			}
 		}
@@ -88,10 +98,22 @@ func (r *awsChunkedReader) Read(p []byte) (n int, err error) {
 	return n, nil
 }
 
+// readLine reads up to and including the next newline. Unlike
+// bufio.Reader.ReadString, it fails with errChunkLineTooLong instead of
+// buffering without limit when no newline arrives within maxChunkLineLength
+// bytes.
+func (r *awsChunkedReader) readLine() (string, error) {
+	line, err := r.reader.ReadSlice('\n')
+	if errors.Is(err, bufio.ErrBufferFull) {
+		return "", errChunkLineTooLong
+	}
+	return string(line), err
+}
+
 // readChunkHeader reads and parses the chunk header
 // Format: <hex-size>;chunk-signature=<sig>\r\n
 func (r *awsChunkedReader) readChunkHeader() (int64, error) {
-	line, err := r.reader.ReadString('\n')
+	line, err := r.readLine()
 	if err != nil {
 		return 0, err
 	}
@@ -124,7 +146,7 @@ func (r *awsChunkedReader) readChunkHeader() (int64, error) {
 // line or end of input.
 func (r *awsChunkedReader) readTrailers() error {
 	for i := 0; i < maxTrailerLines; i++ {
-		line, err := r.reader.ReadString('\n')
+		line, err := r.readLine()
 		if err != nil && err != io.EOF {
 			return err
 		}

@@ -25,11 +25,18 @@ const maxKeysLimit = 1000
 // ErrInvalidMetadata is returned when metadata contains invalid characters
 var ErrInvalidMetadata = errors.New("invalid metadata")
 
-// drainRequestBody discards remaining request body to prevent connection hangs.
-// Should be called on error paths where the body may not have been fully consumed.
+// maxDrainBytes limits how much of a request body drainRequestBody discards
+const maxDrainBytes = 256 * 1024
+
+// drainRequestBody discards the rest of a small request body, so that the
+// client can read the error response on the same connection. Should be called
+// on error paths where the body may not have been fully consumed. It reads at
+// most maxDrainBytes: if more of the body remains, the HTTP server closes the
+// connection after the response instead of the handler reading a large upload
+// to the end.
 func drainRequestBody(r *http.Request) {
 	if r.Body != nil {
-		_, _ = io.Copy(io.Discard, r.Body)
+		_, _ = io.CopyN(io.Discard, r.Body, maxDrainBytes)
 	}
 }
 
