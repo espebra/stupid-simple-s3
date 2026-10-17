@@ -1128,7 +1128,7 @@ func TestListObjectsV2(t *testing.T) {
 }
 
 func TestDeleteObjects(t *testing.T) {
-	handlers, _, cleanup := setupTestHandlers(t)
+	handlers, store, cleanup := setupTestHandlers(t)
 	defer cleanup()
 
 	// Create objects to delete
@@ -1163,6 +1163,43 @@ func TestDeleteObjects(t *testing.T) {
 
 		if len(result.Deleted) != 2 {
 			t.Errorf("Deleted count = %d, want 2", len(result.Deleted))
+		}
+	})
+
+	t.Run("more than 1000 keys", func(t *testing.T) {
+		var deleteXML strings.Builder
+		deleteXML.WriteString("<Delete>")
+		for i := range 1001 {
+			fmt.Fprintf(&deleteXML, "<Object><Key>key-%d</Key></Object>", i)
+		}
+		deleteXML.WriteString("<Object><Key>keep.txt</Key></Object></Delete>")
+
+		req := httptest.NewRequest("POST", "/test-bucket?delete", strings.NewReader(deleteXML.String()))
+		req.SetPathValue("bucket", "test-bucket")
+		w := httptest.NewRecorder()
+		handlers.DeleteObjects(w, req)
+
+		assertErrorCode(t, w, http.StatusBadRequest, s3.ErrMalformedXML)
+		if exists, _ := store.ObjectExists("test-bucket", "keep.txt"); !exists {
+			t.Error("keep.txt was deleted by a rejected request")
+		}
+	})
+
+	t.Run("exactly 1000 keys", func(t *testing.T) {
+		var deleteXML strings.Builder
+		deleteXML.WriteString("<Delete><Quiet>true</Quiet>")
+		for i := range 1000 {
+			fmt.Fprintf(&deleteXML, "<Object><Key>key-%d</Key></Object>", i)
+		}
+		deleteXML.WriteString("</Delete>")
+
+		req := httptest.NewRequest("POST", "/test-bucket?delete", strings.NewReader(deleteXML.String()))
+		req.SetPathValue("bucket", "test-bucket")
+		w := httptest.NewRecorder()
+		handlers.DeleteObjects(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want %d: %s", w.Code, http.StatusOK, w.Body.String())
 		}
 	})
 

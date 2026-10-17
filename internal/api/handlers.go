@@ -1126,6 +1126,9 @@ func (h *Handlers) GetBucketLocation(w http.ResponseWriter, r *http.Request) {
 	_ = xml.NewEncoder(w).Encode(result)
 }
 
+// maxDeleteObjects is the maximum number of keys in one DeleteObjects request
+const maxDeleteObjects = 1000
+
 // maxUploadsLimit is the maximum number of uploads returned by ListMultipartUploads
 const maxUploadsLimit = 1000
 
@@ -1293,6 +1296,13 @@ func (h *Handlers) DeleteObjects(w http.ResponseWriter, r *http.Request) {
 	var deleteReq s3.Delete
 	if err := readXMLBody(r, maxXMLBodySize, &deleteReq); err != nil {
 		writeXMLBodyError(w, err)
+		return
+	}
+
+	// S3 accepts at most 1,000 keys per request and answers MalformedXML
+	// when there are more, as the request does not match its schema
+	if len(deleteReq.Objects) > maxDeleteObjects {
+		s3.WriteErrorResponse(w, s3.ErrMalformedXML)
 		return
 	}
 
