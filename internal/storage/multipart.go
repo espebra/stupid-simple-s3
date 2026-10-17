@@ -458,6 +458,9 @@ func (fs *FilesystemStorage) ListParts(uploadID string) ([]s3.PartMetadata, erro
 		_ = metaFile.Close()
 
 		partMeta.PartNumber = partNum
+		if info, err := os.Stat(filepath.Join(uploadPath, strings.TrimSuffix(name, ".meta"))); err == nil {
+			partMeta.LastModified = info.ModTime().UTC()
+		}
 		parts = append(parts, partMeta)
 	}
 

@@ -45,6 +45,30 @@ type MultipartUpload struct {
 	Initiated    time.Time `xml:"Initiated"`
 }
 
+// ListPartsResult is the response for ListParts
+type ListPartsResult struct {
+	XMLName              xml.Name `xml:"ListPartsResult"`
+	Xmlns                string   `xml:"xmlns,attr"`
+	Bucket               string   `xml:"Bucket"`
+	Key                  string   `xml:"Key"`
+	UploadID             string   `xml:"UploadId"`
+	StorageClass         string   `xml:"StorageClass"`
+	PartNumberMarker     int      `xml:"PartNumberMarker"`
+	NextPartNumberMarker int      `xml:"NextPartNumberMarker,omitempty"`
+	MaxParts             int      `xml:"MaxParts"`
+	IsTruncated          bool     `xml:"IsTruncated"`
+	Parts                []Part   `xml:"Part"`
+}
+
+// Part describes an uploaded part in ListPartsResult
+type Part struct {
+	PartNumber     int       `xml:"PartNumber"`
+	LastModified   time.Time `xml:"LastModified"`
+	ETag           string    `xml:"ETag"`
+	Size           int64     `xml:"Size"`
+	ChecksumSHA256 string    `xml:"ChecksumSHA256,omitempty"`
+}
+
 // CompleteMultipartUpload is the request body for CompleteMultipartUpload
 type CompleteMultipartUpload struct {
 	XMLName xml.Name             `xml:"CompleteMultipartUpload"`
@@ -194,4 +218,7 @@ type PartMetadata struct {
 	Size       int64  `json:"size"`
 	// ChecksumSHA256 is the base64-encoded SHA-256 of the part data
 	ChecksumSHA256 string `json:"checksum_sha256,omitempty"`
+	// LastModified is when the part was uploaded. It is not stored in the
+	// metadata file; ListParts fills it in from the part file.
+	LastModified time.Time `json:"-"`
 }

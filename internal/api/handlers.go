@@ -372,6 +372,11 @@ func (h *Handlers) GetObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Query().Has("uploadId") {
+		h.ListParts(w, r)
+		return
+	}
+
 	// Check for Range header
 	rangeHeader := r.Header.Get("Range")
 	if rangeHeader != "" {
@@ -413,6 +418,88 @@ func (h *Handlers) GetObject(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, reader)
+}
+
+// maxPartsLimit is the maximum number of parts returned by ListParts
+const maxPartsLimit = 1000
+
+// ListParts handles GET /{bucket}/{key}?uploadId=X, with support for
+// part-number-marker and max-parts
+func (h *Handlers) ListParts(w http.ResponseWriter, r *http.Request) {
+	bucket := r.PathValue("bucket")
+	key := r.PathValue("key")
+	query := r.URL.Query()
+	uploadID := query.Get("uploadId")
+
+	maxParts := maxPartsLimit
+	if v := query.Get("max-parts"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
+			return
+		}
+		maxParts = min(n, maxPartsLimit)
+	}
+	partNumberMarker := 0
+	if v := query.Get("part-number-marker"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
+			return
+		}
+		partNumberMarker = n
+	}
+
+	// The upload must belong to this bucket and key
+	uploadMeta, err := h.storage.GetMultipartUpload(uploadID)
+	if err != nil || uploadMeta.Bucket != bucket || uploadMeta.Key != key {
+		s3.WriteErrorResponse(w, s3.ErrNoSuchUpload)
+		return
+	}
+
+	parts, err := h.storage.ListParts(uploadID)
+	if err != nil {
+		if errors.Is(err, storage.ErrUploadNotFound) {
+			s3.WriteErrorResponse(w, s3.ErrNoSuchUpload)
+			return
+		}
+		slog.Error("failed to list parts", "error", err, "bucket", bucket, "key", key, "upload_id", uploadID, "request_id", GetRequestID(r))
+		s3.WriteErrorResponse(w, s3.ErrInternalError)
+		return
+	}
+
+	result := s3.ListPartsResult{
+		Xmlns:            "http://s3.amazonaws.com/doc/2006-03-01/",
+		Bucket:           bucket,
+		Key:              key,
+		UploadID:         uploadID,
+		StorageClass:     "STANDARD",
+		PartNumberMarker: partNumberMarker,
+		MaxParts:         maxParts,
+	}
+	for _, p := range parts {
+		if p.PartNumber <= partNumberMarker {
+			continue
+		}
+		if len(result.Parts) == maxParts {
+			result.IsTruncated = true
+			break
+		}
+		result.Parts = append(result.Parts, s3.Part{
+			PartNumber:     p.PartNumber,
+			LastModified:   p.LastModified,
+			ETag:           p.ETag,
+			Size:           p.Size,
+			ChecksumSHA256: p.ChecksumSHA256,
+		})
+	}
+	if result.IsTruncated && len(result.Parts) > 0 {
+		result.NextPartNumberMarker = result.Parts[len(result.Parts)-1].PartNumber
+	}
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_ = xml.NewEncoder(w).Encode(result)
 }
 
 // GetObjectRange handles GET with Range header
