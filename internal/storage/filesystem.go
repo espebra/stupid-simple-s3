@@ -48,6 +48,12 @@ var ErrUploadNotFound = errors.New("upload not found")
 // ErrPartNotFound is returned when a multipart upload part does not exist
 var ErrPartNotFound = errors.New("part not found")
 
+// ErrEntityTooSmall is returned when a part other than the last is smaller than the minimum part size
+var ErrEntityTooSmall = errors.New("entity too small")
+
+// MinPartSize is the minimum size of every part of a multipart upload except the last, as in S3
+const MinPartSize = 5 * 1024 * 1024
+
 // ErrInvalidPartOrder is returned when parts are not in ascending order
 var ErrInvalidPartOrder = errors.New("parts must be in ascending order")
 
@@ -150,6 +156,9 @@ func ValidateBucketName(name string) error {
 type FilesystemStorage struct {
 	basePath      string
 	multipartPath string
+	// minPartSize is the minimum size of all parts but the last when completing
+	// a multipart upload. It is MinPartSize except in tests.
+	minPartSize int64
 	// uploadLocks holds a per-upload RWMutex so that operations on different
 	// uploads never block each other.
 	uploadLocks sync.Map // map[string]*sync.RWMutex
@@ -190,6 +199,7 @@ func NewFilesystemStorage(basePath, multipartPath string) (*FilesystemStorage, e
 	return &FilesystemStorage{
 		basePath:      basePath,
 		multipartPath: multipartPath,
+		minPartSize:   MinPartSize,
 	}, nil
 }
 

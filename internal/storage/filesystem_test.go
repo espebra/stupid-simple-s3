@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -33,6 +34,9 @@ func setupTestStorage(t *testing.T) (*FilesystemStorage, func()) {
 		_ = os.RemoveAll(tmpDir)
 		t.Fatalf("failed to create storage: %v", err)
 	}
+	// Most tests use small parts; TestCompleteMultipartUploadMinPartSize
+	// tests the limit.
+	storage.minPartSize = 0
 
 	// Create the test bucket
 	if err := storage.CreateBucket(testBucket); err != nil {
@@ -737,6 +741,49 @@ func TestCompleteMultipartUploadLegacyPart(t *testing.T) {
 	if want := compositeChecksum(part1Content, part2Content); objMeta.ChecksumSHA256 != want {
 		t.Errorf("ChecksumSHA256 = %q, want %q", objMeta.ChecksumSHA256, want)
 	}
+}
+
+func TestCompleteMultipartUploadMinPartSize(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+	storage.minPartSize = MinPartSize
+
+	large := bytes.Repeat([]byte("x"), MinPartSize)
+	small := []byte("small")
+
+	upload := func(t *testing.T, contents ...[]byte) error {
+		t.Helper()
+		uploadID, err := storage.CreateMultipartUpload(testBucket, "min-part-size.bin", "application/octet-stream", nil)
+		if err != nil {
+			t.Fatalf("CreateMultipartUpload failed: %v", err)
+		}
+		var parts []s3.CompletedPartInput
+		for i, c := range contents {
+			meta, err := storage.UploadPart(uploadID, i+1, bytes.NewReader(c))
+			if err != nil {
+				t.Fatalf("UploadPart %d failed: %v", i+1, err)
+			}
+			parts = append(parts, s3.CompletedPartInput{PartNumber: i + 1, ETag: meta.ETag})
+		}
+		_, err = storage.CompleteMultipartUpload(uploadID, parts)
+		return err
+	}
+
+	t.Run("small part before the last is rejected", func(t *testing.T) {
+		if err := upload(t, small, large); !errors.Is(err, ErrEntityTooSmall) {
+			t.Errorf("err = %v, want ErrEntityTooSmall", err)
+		}
+	})
+	t.Run("small last part is accepted", func(t *testing.T) {
+		if err := upload(t, large, small); err != nil {
+			t.Errorf("CompleteMultipartUpload failed: %v", err)
+		}
+	})
+	t.Run("single small part is accepted", func(t *testing.T) {
+		if err := upload(t, small); err != nil {
+			t.Errorf("CompleteMultipartUpload failed: %v", err)
+		}
+	})
 }
 
 func TestObjectChecksumAndETag(t *testing.T) {
