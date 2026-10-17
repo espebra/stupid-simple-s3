@@ -203,6 +203,42 @@ func TestAWSSDK_HeadBucket(t *testing.T) {
 	})
 }
 
+// TestAWSSDK_GetBucketLocation tests that GetBucketLocation returns a location
+// constraint rather than an object listing
+func TestAWSSDK_GetBucketLocation(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	ctx := context.Background()
+	client := ts.AWSClient(ctx)
+
+	_, err := client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(TestBucket),
+		Key:    aws.String("object.txt"),
+		Body:   strings.NewReader("data"),
+	})
+	if err != nil {
+		t.Fatalf("PutObject failed: %v", err)
+	}
+
+	result, err := client.GetBucketLocation(ctx, &s3.GetBucketLocationInput{
+		Bucket: aws.String(TestBucket),
+	})
+	if err != nil {
+		t.Fatalf("GetBucketLocation failed: %v", err)
+	}
+	if result.LocationConstraint != "" {
+		t.Errorf("LocationConstraint = %q, want empty (us-east-1)", result.LocationConstraint)
+	}
+
+	_, err = client.GetBucketLocation(ctx, &s3.GetBucketLocationInput{
+		Bucket: aws.String("non-existent-bucket"),
+	})
+	if err == nil {
+		t.Error("expected error for non-existent bucket")
+	}
+}
+
 // TestAWSSDK_PutGetObject tests basic object upload and download
 func TestAWSSDK_PutGetObject(t *testing.T) {
 	ts := NewTestServer(t)
