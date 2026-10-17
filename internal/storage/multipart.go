@@ -22,6 +22,16 @@ import (
 // ErrInvalidUploadID is returned when an upload ID is not a valid UUID
 var ErrInvalidUploadID = errors.New("invalid upload ID")
 
+// uploadDir returns the directory of a multipart upload. Upload IDs from
+// requests are validated as UUIDs before they get here, but the ID is also
+// cleaned as a rooted path, so that the directory stays inside the multipart
+// directory whatever the ID contains. Code scanning (CodeQL go/path-injection)
+// recognizes filepath.Clean("/" + id) as sanitizing the ID, which it does not
+// for the UUID check in validateUploadID.
+func (fs *FilesystemStorage) uploadDir(uploadID string) string {
+	return filepath.Join(fs.multipartPath, filepath.Clean("/"+uploadID))
+}
+
 // validateUploadID checks that the upload ID is a valid UUID.
 // This prevents path traversal attacks since upload IDs are used in filesystem paths.
 func validateUploadID(uploadID string) error {
@@ -44,7 +54,7 @@ func (fs *FilesystemStorage) CreateMultipartUpload(bucket, key string, contentTy
 	}
 
 	uploadID := uuid.New().String()
-	uploadPath := filepath.Join(fs.multipartPath, uploadID)
+	uploadPath := fs.uploadDir(uploadID)
 
 	if err := os.MkdirAll(uploadPath, 0700); err != nil {
 		return "", fmt.Errorf("creating upload directory: %w", err)
@@ -86,9 +96,7 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 	mu.RLock()
 	defer mu.RUnlock()
 
-	// Safe to use in a path: validateUploadID above only accepts UUIDs, which
-	// cannot contain a path separator or "..".
-	uploadPath := filepath.Join(fs.multipartPath, uploadID)
+	uploadPath := fs.uploadDir(uploadID)
 
 	// Check upload exists
 	if _, err := os.Stat(uploadPath); os.IsNotExist(err) {
@@ -171,9 +179,7 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Safe to use in a path: validateUploadID above only accepts UUIDs, which
-	// cannot contain a path separator or "..".
-	uploadPath := filepath.Join(fs.multipartPath, uploadID)
+	uploadPath := fs.uploadDir(uploadID)
 
 	// Get upload metadata (internal call, lock already held)
 	uploadMeta, err := fs.getMultipartUploadInternal(uploadID)
@@ -252,8 +258,8 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	}
 
 	dataPath := filepath.Join(objPath, "data")
-	// uploadID is a validated UUID, so the temp file stays next to dataPath.
-	tmpPath := dataPath + ".tmp." + uploadID
+	tmpID := uuid.New().String()
+	tmpPath := dataPath + ".tmp." + tmpID
 
 	// Concatenate all parts. Copying file to file lets the kernel use
 	// copy_file_range, which avoids user-space copies and can share extents
@@ -303,8 +309,7 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 		ChecksumSHA256: fmt.Sprintf("%s-%d", EncodeChecksum(compositeSum), len(parts)),
 	}
 
-	// uploadID is a validated UUID, so the temp file stays next to meta.json.
-	metaTmpPath := filepath.Join(objPath, "meta.json.tmp."+uploadID)
+	metaTmpPath := filepath.Join(objPath, "meta.json.tmp."+tmpID)
 	if err := writeJSONFile(metaTmpPath, objMeta); err != nil {
 		_ = os.Remove(tmpPath)
 		return nil, fmt.Errorf("writing metadata: %w", err)
@@ -330,9 +335,7 @@ func (fs *FilesystemStorage) AbortMultipartUpload(uploadID string) error {
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Safe to use in a path: validateUploadID above only accepts UUIDs, which
-	// cannot contain a path separator or "..".
-	uploadPath := filepath.Join(fs.multipartPath, uploadID)
+	uploadPath := fs.uploadDir(uploadID)
 
 	if _, err := os.Stat(uploadPath); os.IsNotExist(err) {
 		return ErrUploadNotFound
@@ -364,9 +367,7 @@ func (fs *FilesystemStorage) getMultipartUploadInternal(uploadID string) (*s3.Mu
 		return nil, ErrUploadNotFound
 	}
 
-	// Safe to use in a path: validateUploadID above only accepts UUIDs, which
-	// cannot contain a path separator or "..".
-	uploadPath := filepath.Join(fs.multipartPath, uploadID)
+	uploadPath := fs.uploadDir(uploadID)
 	metaPath := filepath.Join(uploadPath, "meta.json")
 
 	metaFile, err := os.Open(metaPath)
@@ -395,9 +396,7 @@ func (fs *FilesystemStorage) ListParts(uploadID string) ([]s3.PartMetadata, erro
 	mu.RLock()
 	defer mu.RUnlock()
 
-	// Safe to use in a path: validateUploadID above only accepts UUIDs, which
-	// cannot contain a path separator or "..".
-	uploadPath := filepath.Join(fs.multipartPath, uploadID)
+	uploadPath := fs.uploadDir(uploadID)
 
 	entries, err := os.ReadDir(uploadPath)
 	if err != nil {
@@ -538,7 +537,7 @@ func (fs *FilesystemStorage) CleanupStaleUploads(maxAge time.Duration) (int, err
 	// (completed, aborted, or just cleaned up above).
 	fs.uploadLocks.Range(func(key, value any) bool {
 		uploadID := key.(string)
-		dir := filepath.Join(fs.multipartPath, uploadID)
+		dir := fs.uploadDir(uploadID)
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			fs.uploadLocks.Delete(key)
 		}
@@ -554,7 +553,7 @@ func (fs *FilesystemStorage) cleanupUploadIfStale(uploadID string, cutoff time.T
 	mu.Lock()
 	defer mu.Unlock()
 
-	uploadPath := filepath.Join(fs.multipartPath, uploadID)
+	uploadPath := fs.uploadDir(uploadID)
 
 	// Check if still exists (might have been completed/aborted)
 	if _, err := os.Stat(uploadPath); os.IsNotExist(err) {
@@ -632,8 +631,9 @@ func partDigest(partMeta *s3.PartMetadata, partPath string) ([]byte, error) {
 	}
 	// partPath is safe to open even though it is built from request data:
 	// CompleteMultipartUpload rejects any upload ID that is not a UUID
-	// (validateUploadID), and the part number is an int formatted as
-	// "part.%05d", so neither can contain a path separator or "..".
+	// (validateUploadID) and builds the directory with uploadDir, and the
+	// part number is an int formatted as "part.%05d", so neither can contain
+	// a path separator or "..".
 	f, err := os.Open(partPath)
 	if err != nil {
 		return nil, err

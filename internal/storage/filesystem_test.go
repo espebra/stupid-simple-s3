@@ -771,6 +771,18 @@ func TestDeleteBucketNotEmpty(t *testing.T) {
 	}
 }
 
+func TestUploadDirStaysInMultipartPath(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	for _, id := range []string{"../../etc", "/etc/passwd", "a/../../b", "..", ""} {
+		dir := storage.uploadDir(id)
+		if dir != storage.multipartPath && !strings.HasPrefix(dir, storage.multipartPath+string(filepath.Separator)) {
+			t.Errorf("uploadDir(%q) = %q, outside %q", id, dir, storage.multipartPath)
+		}
+	}
+}
+
 func TestCompleteMultipartUploadMinPartSize(t *testing.T) {
 	storage, cleanup := setupTestStorage(t)
 	defer cleanup()
