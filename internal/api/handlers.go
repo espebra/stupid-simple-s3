@@ -571,17 +571,19 @@ func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get object metadata first to validate range
-	meta, err := h.storage.HeadObject(bucket, key)
+	// Open the object once and take the range, headers and data all from
+	// it, so that an overwrite in between cannot mix two versions
+	file, meta, err := h.storage.GetObject(bucket, key)
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectNotFound) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
 			return
 		}
-		slog.Error("failed to get object metadata for range request", "error", err, "bucket", bucket, "key", key, "request_id", GetRequestID(r))
+		slog.Error("failed to open object for range request", "error", err, "bucket", bucket, "key", key, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
+	defer func() { _ = file.Close() }()
 
 	// Handle suffix range (bytes=-N means last N bytes)
 	if start < 0 {
@@ -604,15 +606,13 @@ func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reader, _, err := h.storage.GetObjectRange(bucket, key, start, end)
-	if err != nil {
-		slog.Error("failed to get object range", "error", err, "bucket", bucket, "key", key, "start", start, "end", end, "request_id", GetRequestID(r))
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		slog.Error("failed to seek to object range", "error", err, "bucket", bucket, "key", key, "start", start, "end", end, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
 		return
 	}
-	defer func() { _ = reader.Close() }()
-
 	contentLength := end - start + 1
+	reader := io.LimitReader(file, contentLength)
 
 	// Set response headers
 	w.Header().Set("Content-Type", meta.ContentType)

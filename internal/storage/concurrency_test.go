@@ -1002,3 +1002,74 @@ func TestConcurrentPutSameKeyKeepsMetadataConsistent(t *testing.T) {
 		}
 	}
 }
+
+// TestConcurrentGetDuringOverwrite tests that a read during overwrites gets
+// the data and metadata of the same write
+func TestConcurrentGetDuringOverwrite(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	versions := [][]byte{bytes.Repeat([]byte("a"), 1000), bytes.Repeat([]byte("b"), 3000)}
+	if _, err := storage.PutObject(testBucket, "overwritten", "text/plain", nil, bytes.NewReader(versions[0])); err != nil {
+		t.Fatalf("PutObject failed: %v", err)
+	}
+
+	stop := make(chan struct{})
+	var writers sync.WaitGroup
+	writers.Add(1)
+	go func() {
+		defer writers.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := storage.PutObject(testBucket, "overwritten", "text/plain", nil, bytes.NewReader(versions[i%2])); err != nil {
+				t.Errorf("PutObject failed: %v", err)
+				return
+			}
+		}
+	}()
+
+	check := func(t *testing.T, data []byte, meta *s3.ObjectMetadata, wantLen int64) bool {
+		t.Helper()
+		if int64(len(data)) != wantLen || meta.ChecksumSHA256 != sha256Checksum(versions[0]) && meta.ChecksumSHA256 != sha256Checksum(versions[1]) {
+			t.Errorf("got %d bytes, want %d (metadata size %d)", len(data), wantLen, meta.Size)
+			return false
+		}
+		want := versions[0]
+		if meta.Size == int64(len(versions[1])) {
+			want = versions[1]
+		}
+		if !bytes.Equal(data, want[:len(data)]) {
+			t.Errorf("data of one version (%q...) with metadata of another (size %d)", data[:1], meta.Size)
+			return false
+		}
+		return true
+	}
+
+	for range 2000 {
+		reader, meta, err := storage.GetObject(testBucket, "overwritten")
+		if err != nil {
+			t.Fatalf("GetObject failed: %v", err)
+		}
+		data, _ := io.ReadAll(reader)
+		_ = reader.Close()
+		if !check(t, data, meta, meta.Size) {
+			break
+		}
+
+		rangeReader, rangeMeta, err := storage.GetObjectRange(testBucket, "overwritten", 500, 999)
+		if err != nil {
+			t.Fatalf("GetObjectRange failed: %v", err)
+		}
+		data, _ = io.ReadAll(rangeReader)
+		_ = rangeReader.Close()
+		if !check(t, data, rangeMeta, 500) {
+			break
+		}
+	}
+	close(stop)
+	writers.Wait()
+}

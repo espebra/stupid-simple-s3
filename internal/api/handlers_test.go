@@ -1379,6 +1379,57 @@ func TestCopyObject(t *testing.T) {
 	})
 }
 
+// TestGetObjectRangeDuringOverwrite tests that a range response takes its
+// Content-Range and body from the same version of an object being overwritten
+func TestGetObjectRangeDuringOverwrite(t *testing.T) {
+	handlers, store, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	versions := []string{strings.Repeat("a", 1000), strings.Repeat("b", 3000)}
+	if _, err := store.PutObject("test-bucket", "overwritten", "text/plain", nil, strings.NewReader(versions[0])); err != nil {
+		t.Fatalf("PutObject failed: %v", err)
+	}
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := store.PutObject("test-bucket", "overwritten", "text/plain", nil, strings.NewReader(versions[i%2])); err != nil {
+				t.Errorf("PutObject failed: %v", err)
+				return
+			}
+		}
+	}()
+	defer func() { close(stop); <-done }()
+
+	for range 2000 {
+		req := httptest.NewRequest("GET", "/test-bucket/overwritten", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", "overwritten")
+		req.Header.Set("Range", "bytes=-100")
+		w := httptest.NewRecorder()
+		handlers.GetObject(w, req)
+
+		if w.Code != http.StatusPartialContent {
+			t.Fatalf("status = %d, want %d", w.Code, http.StatusPartialContent)
+		}
+		want := "bytes 900-999/1000"
+		letter := "a"
+		if w.Header().Get("Content-Range") == "bytes 2900-2999/3000" {
+			want, letter = "bytes 2900-2999/3000", "b"
+		}
+		if got := w.Header().Get("Content-Range"); got != want || w.Body.String() != strings.Repeat(letter, 100) {
+			t.Fatalf("Content-Range %q with body %q...", got, w.Body.String()[:min(5, w.Body.Len())])
+		}
+	}
+}
+
 func TestGetObjectRange(t *testing.T) {
 	handlers, _, cleanup := setupTestHandlers(t)
 	defer cleanup()
