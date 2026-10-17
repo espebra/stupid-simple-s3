@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -234,7 +235,7 @@ func accessLogMiddleware(trustedProxies []string, isInternal func(path string) b
 			attrs := []slog.Attr{
 				slog.String("client_ip", clientIP),
 				slog.String("method", r.Method),
-				slog.String("path", r.URL.RequestURI()),
+				slog.String("path", redactedRequestURI(r.URL)),
 				slog.Int("status", rw.statusCode),
 				slog.Int64("bytes_in", cr.bytesRead),
 				slog.Int64("bytes_out", rw.bytesWritten),
@@ -252,6 +253,28 @@ func accessLogMiddleware(trustedProxies []string, isInternal func(path string) b
 			slog.LogAttrs(r.Context(), slog.LevelInfo, "request", attrs...)
 		})
 	}
+}
+
+// redactedRequestURI returns the request URI for logging, with the values of
+// all X-Amz-* query parameters replaced. A presigned URL carries its
+// credential and signature in these parameters, and anyone who can read the
+// logs could otherwise reuse it until it expires. Other parameters, such as
+// uploadId and partNumber, are kept in their original order and encoding.
+func redactedRequestURI(u *url.URL) string {
+	if u.RawQuery == "" {
+		return u.RequestURI()
+	}
+	params := strings.Split(u.RawQuery, "&")
+	for i, param := range params {
+		name, _, _ := strings.Cut(param, "=")
+		if unescaped, err := url.QueryUnescape(name); err == nil {
+			name = unescaped
+		}
+		if len(name) >= 6 && strings.EqualFold(name[:6], "x-amz-") {
+			params[i] = url.QueryEscape(name) + "=REDACTED"
+		}
+	}
+	return u.EscapedPath() + "?" + strings.Join(params, "&")
 }
 
 // isHealthEndpoint returns true for health check endpoints
