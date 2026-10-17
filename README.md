@@ -382,17 +382,12 @@ Objects are stored on the filesystem organized by bucket, with a 4-character has
 
 ## Limitations
 
-**ListObjectsV2 does not scale to large buckets.** Objects are stored under SHA-256 hash directories for even write distribution, which means there is no on-disk key ordering. It works well for get/put/delete operations that are O(1), but is expensive with ordered listing. Every ListObjectsV2 call must:
+**The first listing of a bucket reads every object's metadata.** Objects are stored under SHA-256 hash directories for even write distribution, so there is no on-disk key ordering. To list a bucket in key order, the service keeps an in-memory index of each bucket's keys, with the size, ETag and last-modified time of each object.
 
-1. Walk every directory in the bucket.
-2. Open and JSON-decode every `meta.json` to recover the original key.
-3. Sort all keys in memory.
-4. Apply prefix filtering, delimiter handling, and pagination.
-5. Re-open `meta.json` for the result page to load full metadata (object size and created timestamp).
-
-This is O(N) in disk I/O and O(N log N) in CPU per request, regardless of `max-keys`. Pagination does not reduce the work — the full walk and sort happens on every request. For buckets with many objects, this will be slow.
-
-The design is a tradeoff that prioritizes simplicity in implenentation and operation over performance, until a more efficient (and still simple) design pops up on the radar.
+- The index of a bucket is built on its first listing after startup, by walking the bucket and reading every `meta.json`. That listing is O(N) in disk I/O. Buckets that are never listed are never indexed.
+- After that, writes and deletes made through the service keep the index up to date, and listings are served from memory with no disk I/O, in time proportional to the page size.
+- The index uses roughly 150–200 bytes of memory per object in each listed bucket.
+- Changes made directly on disk, outside the service, are not seen by listings until the service is restarted.
 
 ## Production Deployment
 
