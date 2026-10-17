@@ -126,6 +126,8 @@ This behavior ensures that ongoing uploads and downloads have a chance to comple
 
 The cleanup job runs periodically to remove stale multipart uploads. When a multipart upload is initiated but never completed or aborted, the uploaded parts remain on disk in the `STUPID_MULTIPART_PATH` directory. The cleanup job deletes these orphaned uploads to reclaim disk space.
 
+It also removes temp files left in a bucket's `tmp/` directory by uploads that were interrupted by a crash or restart. Only the `tmp/` directories are read, so the cost of the cleanup job does not grow with the number of objects. Versions before the `tmp/` directory kept temp files next to the objects, as `data.tmp.*` and `meta.json.tmp.*`; leftovers from those versions are not removed by the cleanup job, and can be removed once with, for example, `find /var/lib/stupid-simple-s3/data/buckets -name '*.tmp.*' -mmin +60 -delete`.
+
 - **Interval**: How often the cleanup job runs (default: every hour)
 - **Max Age**: Uploads older than this are considered stale and removed (default: 24 hours)
 
@@ -371,6 +373,9 @@ Objects are stored on the filesystem organized by bucket, with a 4-character has
         {sha256-hex-digest-of-the-key}/
           data        # object content
           meta.json   # metadata (key, size, content-type, etag, etc.)
+    tmp/
+      {uuid}.data     # temp files of uploads in progress, renamed into
+      {uuid}.meta     # the object directory when the upload completes
 
 /var/lib/stupid-simple-s3/tmp/
   {upload-id}/
