@@ -2151,3 +2151,54 @@ func TestUploadSizeLimits(t *testing.T) {
 		}
 	})
 }
+
+// readerFromRecorder is a ResponseWriter that records whether data was
+// copied to it with ReadFrom, as the HTTP server's own writer does to use
+// sendfile
+type readerFromRecorder struct {
+	*httptest.ResponseRecorder
+	readFromCalls int
+}
+
+func (r *readerFromRecorder) ReadFrom(src io.Reader) (int64, error) {
+	r.readFromCalls++
+	return io.Copy(r.ResponseRecorder, src)
+}
+
+// TestResponseWriterReadFrom tests that the metrics and access-log wrappers
+// pass file copies on to the server's writer, and still count the bytes
+func TestResponseWriterReadFrom(t *testing.T) {
+	content := bytes.Repeat([]byte("x"), 100*1024)
+	path := filepath.Join(t.TempDir(), "data")
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatalf("writing file: %v", err)
+	}
+
+	for name, open := range map[string]func(*os.File) io.Reader{
+		"whole file": func(f *os.File) io.Reader { return f },
+		"range":      func(f *os.File) io.Reader { return io.LimitReader(f, 1000) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, err := os.Open(path)
+			if err != nil {
+				t.Fatalf("opening file: %v", err)
+			}
+			defer func() { _ = f.Close() }()
+
+			rec := &readerFromRecorder{ResponseRecorder: httptest.NewRecorder()}
+			inner := newResponseWriter(rec)
+			outer := newResponseWriter(inner)
+			src := open(f)
+			n, err := io.Copy(outer, src)
+			if err != nil {
+				t.Fatalf("io.Copy failed: %v", err)
+			}
+			if rec.readFromCalls == 0 {
+				t.Error("the server's writer was not used through ReadFrom")
+			}
+			if outer.bytesWritten != n || inner.bytesWritten != n || int64(rec.Body.Len()) != n {
+				t.Errorf("bytes counted: outer %d, inner %d, written %d; copied %d", outer.bytesWritten, inner.bytesWritten, rec.Body.Len(), n)
+			}
+		})
+	}
+}
