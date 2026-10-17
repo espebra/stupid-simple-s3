@@ -966,3 +966,39 @@ func TestConcurrentPutAndDeleteBucket(t *testing.T) {
 		}
 	}
 }
+
+// TestConcurrentPutSameKeyKeepsMetadataConsistent tests that concurrent
+// writes to the same key leave metadata that describes the stored data, not
+// the data of one write and the metadata of another.
+func TestConcurrentPutSameKeyKeepsMetadataConsistent(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	const writers = 8
+	for round := range 50 {
+		var wg sync.WaitGroup
+		for i := range writers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				// Different sizes, so mismatched metadata shows in the size too
+				data := bytes.Repeat([]byte{byte('a' + i)}, 1000+i*100)
+				if _, err := storage.PutObject(testBucket, "same-key", "text/plain", nil, bytes.NewReader(data)); err != nil {
+					t.Errorf("round %d: PutObject failed: %v", round, err)
+				}
+			}()
+		}
+		wg.Wait()
+
+		reader, meta, err := storage.GetObject(testBucket, "same-key")
+		if err != nil {
+			t.Fatalf("round %d: GetObject failed: %v", round, err)
+		}
+		data, _ := io.ReadAll(reader)
+		_ = reader.Close()
+		if meta.Size != int64(len(data)) || meta.ChecksumSHA256 != sha256Checksum(data) {
+			t.Fatalf("round %d: metadata (size %d, checksum %s) does not describe the stored data (size %d, checksum %s)",
+				round, meta.Size, meta.ChecksumSHA256, len(data), sha256Checksum(data))
+		}
+	}
+}
