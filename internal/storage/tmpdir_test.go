@@ -218,3 +218,27 @@ func TestUploadInProgressBlocksDeleteBucket(t *testing.T) {
 		t.Error("uploaded object does not exist")
 	}
 }
+
+// TestWriteThroughPlantedSymlinkRejected tests that a symlink planted in the
+// storage tree cannot make a write land outside the base path
+func TestWriteThroughPlantedSymlinkRejected(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	objPath, err := storage.keyToPath(testBucket, "redirected")
+	if err != nil {
+		t.Fatalf("keyToPath failed: %v", err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Dir(objPath)); err != nil {
+		t.Fatalf("planting symlink: %v", err)
+	}
+
+	_, err = storage.PutObject(testBucket, "redirected", "text/plain", nil, bytes.NewReader([]byte("data")))
+	if !errors.Is(err, ErrInvalidKey) {
+		t.Errorf("PutObject through a planted symlink: err = %v, want ErrInvalidKey", err)
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Errorf("write left %d entries outside the base path", len(entries))
+	}
+}
