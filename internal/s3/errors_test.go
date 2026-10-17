@@ -134,6 +134,7 @@ func TestAllErrorCodesHaveStatusCodes(t *testing.T) {
 		ErrAuthorizationHeaderMalformed,
 		ErrExpiredToken,
 		ErrXAmzContentSHA256Mismatch,
+		ErrPreconditionFailed,
 	}
 
 	for _, code := range codes {
@@ -172,6 +173,7 @@ func TestAllErrorCodesHaveMessages(t *testing.T) {
 		ErrAuthorizationHeaderMalformed,
 		ErrExpiredToken,
 		ErrXAmzContentSHA256Mismatch,
+		ErrPreconditionFailed,
 	}
 
 	for _, code := range codes {

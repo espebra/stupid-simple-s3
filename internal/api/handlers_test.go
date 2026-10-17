@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/espen/stupid-simple-s3/internal/config"
 	"github.com/espen/stupid-simple-s3/internal/metrics"
@@ -2201,4 +2202,112 @@ func TestResponseWriterReadFrom(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConditionalRequests(t *testing.T) {
+	handlers, store, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	meta, err := store.PutObject("test-bucket", "conditional.txt", "text/plain", nil, strings.NewReader("conditional content"))
+	if err != nil {
+		t.Fatalf("PutObject failed: %v", err)
+	}
+	etag := meta.ETag
+	lastModified := meta.LastModified.UTC()
+	before := lastModified.Add(-time.Hour).Format(http.TimeFormat)
+	after := lastModified.Add(time.Hour).Format(http.TimeFormat)
+	same := lastModified.Format(http.TimeFormat)
+
+	tests := []struct {
+		name    string
+		headers map[string]string
+		want    int
+	}{
+		{"no conditions", nil, http.StatusOK},
+		{"If-Match matches", map[string]string{"If-Match": etag}, http.StatusOK},
+		{"If-Match unquoted", map[string]string{"If-Match": strings.Trim(etag, `"`)}, http.StatusOK},
+		{"If-Match in a list", map[string]string{"If-Match": `"other", ` + etag}, http.StatusOK},
+		{"If-Match star", map[string]string{"If-Match": "*"}, http.StatusOK},
+		{"If-Match differs", map[string]string{"If-Match": `"other"`}, http.StatusPreconditionFailed},
+		{"If-Match weak", map[string]string{"If-Match": "W/" + etag}, http.StatusPreconditionFailed},
+		{"If-None-Match matches", map[string]string{"If-None-Match": etag}, http.StatusNotModified},
+		{"If-None-Match weak", map[string]string{"If-None-Match": "W/" + etag}, http.StatusNotModified},
+		{"If-None-Match star", map[string]string{"If-None-Match": "*"}, http.StatusNotModified},
+		{"If-None-Match differs", map[string]string{"If-None-Match": `"other"`}, http.StatusOK},
+		{"If-Modified-Since before", map[string]string{"If-Modified-Since": before}, http.StatusOK},
+		{"If-Modified-Since same second", map[string]string{"If-Modified-Since": same}, http.StatusNotModified},
+		{"If-Modified-Since after", map[string]string{"If-Modified-Since": after}, http.StatusNotModified},
+		{"If-Modified-Since invalid", map[string]string{"If-Modified-Since": "yesterday"}, http.StatusOK},
+		{"If-Unmodified-Since after", map[string]string{"If-Unmodified-Since": after}, http.StatusOK},
+		{"If-Unmodified-Since before", map[string]string{"If-Unmodified-Since": before}, http.StatusPreconditionFailed},
+		// If-Match takes precedence over If-Unmodified-Since, and
+		// If-None-Match over If-Modified-Since
+		{"If-Match matches, If-Unmodified-Since fails", map[string]string{"If-Match": etag, "If-Unmodified-Since": before}, http.StatusOK},
+		{"If-None-Match differs, If-Modified-Since not modified", map[string]string{"If-None-Match": `"other"`, "If-Modified-Since": after}, http.StatusOK},
+		{"If-Match fails before If-None-Match", map[string]string{"If-Match": `"other"`, "If-None-Match": etag}, http.StatusPreconditionFailed},
+	}
+
+	for _, method := range []string{"GET", "HEAD"} {
+		for _, tt := range tests {
+			t.Run(method+" "+tt.name, func(t *testing.T) {
+				req := httptest.NewRequest(method, "/test-bucket/conditional.txt", nil)
+				req.SetPathValue("bucket", "test-bucket")
+				req.SetPathValue("key", "conditional.txt")
+				for k, v := range tt.headers {
+					req.Header.Set(k, v)
+				}
+				w := httptest.NewRecorder()
+				if method == "GET" {
+					handlers.GetObject(w, req)
+				} else {
+					handlers.HeadObject(w, req)
+				}
+
+				if w.Code != tt.want {
+					t.Fatalf("status = %d, want %d", w.Code, tt.want)
+				}
+				switch tt.want {
+				case http.StatusNotModified:
+					if w.Body.Len() != 0 {
+						t.Errorf("304 response has a body: %q", w.Body.String())
+					}
+					if w.Header().Get("ETag") != etag {
+						t.Errorf("304 ETag = %q, want %q", w.Header().Get("ETag"), etag)
+					}
+				case http.StatusPreconditionFailed:
+					if method == "GET" {
+						assertErrorCode(t, w, http.StatusPreconditionFailed, s3.ErrPreconditionFailed)
+					}
+				case http.StatusOK:
+					if method == "GET" && w.Body.String() != "conditional content" {
+						t.Errorf("body = %q", w.Body.String())
+					}
+				}
+			})
+		}
+	}
+
+	t.Run("range with If-None-Match matching", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test-bucket/conditional.txt", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", "conditional.txt")
+		req.Header.Set("Range", "bytes=0-4")
+		req.Header.Set("If-None-Match", etag)
+		w := httptest.NewRecorder()
+		handlers.GetObject(w, req)
+		if w.Code != http.StatusNotModified || w.Body.Len() != 0 {
+			t.Errorf("status = %d, body %q; want 304 without body", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("range with If-Match failing", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test-bucket/conditional.txt", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		req.SetPathValue("key", "conditional.txt")
+		req.Header.Set("Range", "bytes=0-4")
+		req.Header.Set("If-Match", `"other"`)
+		w := httptest.NewRecorder()
+		handlers.GetObject(w, req)
+		assertErrorCode(t, w, http.StatusPreconditionFailed, s3.ErrPreconditionFailed)
+	})
 }
