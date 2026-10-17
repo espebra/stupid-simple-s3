@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/espen/stupid-simple-s3/internal/config"
+	"github.com/espen/stupid-simple-s3/internal/metrics"
 	"github.com/espen/stupid-simple-s3/internal/s3"
 	"github.com/espen/stupid-simple-s3/internal/storage"
 )
@@ -1605,6 +1606,28 @@ func TestAccessLogRedactsPresignedURLs(t *testing.T) {
 	want := "/bucket/key.txt?uploadId=abc&X-Amz-Algorithm=REDACTED&X-Amz-Credential=REDACTED&x-amz-signature=REDACTED&partNumber=2"
 	if !strings.Contains(logged, want) {
 		t.Errorf("access log does not contain %q: %s", want, logged)
+	}
+}
+
+func TestDetectOperation(t *testing.T) {
+	tests := []struct {
+		target string
+		want   string
+	}{
+		{"/bucket", metrics.OpListObjects},
+		{"/bucket?list-type=2&prefix=a", metrics.OpListObjects},
+		{"/bucket/", metrics.OpListObjects},
+		{"/bucket?location", metrics.OpGetBucketLocation},
+		{"/bucket?uploads", metrics.OpListMultipartUploads},
+		{"/bucket/key", metrics.OpGetObject},
+		{"/bucket/dir/key", metrics.OpGetObject},
+		{"/bucket/key?uploadId=abc", metrics.OpListParts},
+	}
+	for _, tt := range tests {
+		req := httptest.NewRequest("GET", tt.target, nil)
+		if got := detectOperation(req); got != tt.want {
+			t.Errorf("detectOperation(GET %s) = %q, want %q", tt.target, got, tt.want)
+		}
 	}
 }
 
