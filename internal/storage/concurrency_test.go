@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -826,5 +828,83 @@ func TestConcurrentCompleteSameKey(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+// slowReader returns its data in small chunks, yielding between reads, so
+// that concurrent writers interleave.
+type slowReader struct {
+	data []byte
+}
+
+func (r *slowReader) Read(p []byte) (int, error) {
+	if len(r.data) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p[:min(len(p), 512)], r.data)
+	r.data = r.data[n:]
+	runtime.Gosched()
+	return n, nil
+}
+
+// TestConcurrentUploadsOfSamePart tests that concurrent uploads of the same
+// part number leave the data and metadata of exactly one of them.
+func TestConcurrentUploadsOfSamePart(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	uploadID, err := storage.CreateMultipartUpload(testBucket, "same-part.bin", "application/octet-stream", nil)
+	if err != nil {
+		t.Fatalf("CreateMultipartUpload failed: %v", err)
+	}
+
+	const numWriters = 20
+	const partSize = 64 * 1024
+	contents := make([][]byte, numWriters)
+	for i := range contents {
+		contents[i] = bytes.Repeat([]byte{byte('a' + i)}, partSize)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, numWriters)
+	for i := range numWriters {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := storage.UploadPart(uploadID, 1, &slowReader{data: contents[i]}); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("UploadPart failed: %v", err)
+	}
+
+	parts, err := storage.ListParts(uploadID)
+	if err != nil || len(parts) != 1 {
+		t.Fatalf("ListParts = %v, %v; want one part", parts, err)
+	}
+	objMeta, err := storage.CompleteMultipartUpload(uploadID, []s3.CompletedPartInput{{PartNumber: 1, ETag: parts[0].ETag}})
+	if err != nil {
+		t.Fatalf("CompleteMultipartUpload failed: %v", err)
+	}
+
+	reader, _, err := storage.GetObject(testBucket, "same-part.bin")
+	if err != nil {
+		t.Fatalf("GetObject failed: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	data, _ := io.ReadAll(reader)
+
+	if !slices.ContainsFunc(contents, func(c []byte) bool { return bytes.Equal(c, data) }) {
+		t.Fatalf("part data is not the data of any single upload (%d bytes)", len(data))
+	}
+	if want := sha256Checksum(data); parts[0].ChecksumSHA256 != want {
+		t.Errorf("part checksum %q does not match the part data (%q)", parts[0].ChecksumSHA256, want)
+	}
+	if objMeta.Size != partSize {
+		t.Errorf("object size = %d, want %d", objMeta.Size, partSize)
 	}
 }
