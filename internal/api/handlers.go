@@ -957,6 +957,11 @@ func (h *Handlers) GetBucket(w http.ResponseWriter, r *http.Request) {
 
 	query := r.URL.Query()
 
+	if query.Has("location") {
+		h.GetBucketLocation(w, r)
+		return
+	}
+
 	// ListObjectsV2 (list-type=2) or ListObjects (no list-type)
 	if query.Get("list-type") == "2" {
 		h.ListObjectsV2(w, r)
@@ -965,6 +970,16 @@ func (h *Handlers) GetBucket(w http.ResponseWriter, r *http.Request) {
 
 	// Default to ListObjectsV2 behavior for simplicity
 	h.ListObjectsV2(w, r)
+}
+
+// GetBucketLocation handles GET /{bucket}?location. The service has no
+// regions, so it reports an empty location constraint, which S3 clients
+// read as us-east-1.
+func (h *Handlers) GetBucketLocation(w http.ResponseWriter, r *http.Request) {
+	result := s3.LocationConstraint{Xmlns: "http://s3.amazonaws.com/doc/2006-03-01/"}
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_ = xml.NewEncoder(w).Encode(result)
 }
 
 // ListObjectsV2 handles GET /{bucket}?list-type=2

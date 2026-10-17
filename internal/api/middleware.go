@@ -341,6 +341,9 @@ func detectOperation(r *http.Request) string {
 		return metrics.OpHeadBucket
 
 	case "GET":
+		if strings.Count(r.URL.Path, "/") == 1 && query.Has("location") {
+			return metrics.OpGetBucketLocation
+		}
 		return metrics.OpGetObject
 
 	case "PUT":

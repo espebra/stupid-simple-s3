@@ -14,6 +14,14 @@ type InitiateMultipartUploadResult struct {
 	UploadID string   `xml:"UploadId"`
 }
 
+// LocationConstraint is the response for GetBucketLocation. An empty value
+// means us-east-1.
+type LocationConstraint struct {
+	XMLName xml.Name `xml:"LocationConstraint"`
+	Xmlns   string   `xml:"xmlns,attr"`
+	Value   string   `xml:",chardata"`
+}
+
 // CompleteMultipartUpload is the request body for CompleteMultipartUpload
 type CompleteMultipartUpload struct {
 	XMLName xml.Name             `xml:"CompleteMultipartUpload"`

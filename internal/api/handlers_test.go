@@ -851,6 +851,27 @@ func TestGetBucket(t *testing.T) {
 			t.Errorf("KeyCount = %d, want 0", result.KeyCount)
 		}
 	})
+
+	t.Run("location", func(t *testing.T) {
+		handlers.PutObject(httptest.NewRecorder(), newPutRequest("object.txt", "data"))
+
+		req := httptest.NewRequest("GET", "/test-bucket?location", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		w := httptest.NewRecorder()
+
+		handlers.GetBucket(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+		}
+		var result s3.LocationConstraint
+		if err := xml.NewDecoder(w.Body).Decode(&result); err != nil {
+			t.Fatalf("failed to decode LocationConstraint: %v", err)
+		}
+		if result.Value != "" {
+			t.Errorf("LocationConstraint = %q, want empty (us-east-1)", result.Value)
+		}
+	})
 }
 
 func TestListObjectsV2(t *testing.T) {
