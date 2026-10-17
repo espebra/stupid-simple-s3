@@ -450,6 +450,11 @@ func (h *Handlers) GetObject(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = reader.Close() }()
 
+	if status := checkPreconditions(r, meta); status != 0 {
+		writePreconditionResponse(w, status, meta)
+		return
+	}
+
 	// Set response headers
 	w.Header().Set("Content-Type", meta.ContentType)
 	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
@@ -584,6 +589,12 @@ func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = file.Close() }()
+
+	// Conditional headers are evaluated before the range
+	if status := checkPreconditions(r, meta); status != 0 {
+		writePreconditionResponse(w, status, meta)
+		return
+	}
 
 	// Handle suffix range (bytes=-N means last N bytes)
 	if start < 0 {
@@ -755,6 +766,11 @@ func (h *Handlers) HeadObject(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.Error("failed to head object", "error", err, "bucket", bucket, "key", key, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
+		return
+	}
+
+	if status := checkPreconditions(r, meta); status != 0 {
+		writePreconditionResponse(w, status, meta)
 		return
 	}
 

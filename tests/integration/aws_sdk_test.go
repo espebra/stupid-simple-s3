@@ -377,6 +377,48 @@ func TestAWSSDK_ListObjectsV2PaginationWithDelimiter(t *testing.T) {
 	}
 }
 
+// TestAWSSDK_ConditionalGet tests conditional GET and HEAD requests with
+// the AWS SDK
+func TestAWSSDK_ConditionalGet(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	ctx := context.Background()
+	client := ts.AWSClient(ctx)
+
+	put, err := client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(TestBucket),
+		Key:    aws.String("conditional.txt"),
+		Body:   strings.NewReader("conditional content"),
+	})
+	if err != nil {
+		t.Fatalf("PutObject failed: %v", err)
+	}
+
+	t.Run("If-None-Match matching returns 304", func(t *testing.T) {
+		_, err := client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(TestBucket), Key: aws.String("conditional.txt"), IfNoneMatch: put.ETag})
+		assertAPIErrorCode(t, err, "NotModified")
+		_, err = client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(TestBucket), Key: aws.String("conditional.txt"), IfNoneMatch: put.ETag})
+		assertAPIErrorCode(t, err, "NotModified")
+	})
+
+	t.Run("If-Match differing returns 412", func(t *testing.T) {
+		_, err := client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(TestBucket), Key: aws.String("conditional.txt"), IfMatch: aws.String(`"other"`)})
+		assertAPIErrorCode(t, err, "PreconditionFailed")
+	})
+
+	t.Run("If-Match matching returns the object", func(t *testing.T) {
+		result, err := client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(TestBucket), Key: aws.String("conditional.txt"), IfMatch: put.ETag})
+		if err != nil {
+			t.Fatalf("GetObject failed: %v", err)
+		}
+		defer func() { _ = result.Body.Close() }()
+		if data, _ := io.ReadAll(result.Body); string(data) != "conditional content" {
+			t.Errorf("body = %q", data)
+		}
+	})
+}
+
 // TestAWSSDK_PutGetObject tests basic object upload and download
 func TestAWSSDK_PutGetObject(t *testing.T) {
 	ts := NewTestServer(t)

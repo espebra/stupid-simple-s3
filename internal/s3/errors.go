@@ -34,6 +34,7 @@ const (
 	ErrEntityTooLarge               ErrorCode = "EntityTooLarge"
 	ErrInvalidRange                 ErrorCode = "InvalidRange"
 	ErrXAmzContentSHA256Mismatch    ErrorCode = "XAmzContentSHA256Mismatch"
+	ErrPreconditionFailed           ErrorCode = "PreconditionFailed"
 )
 
 var errorStatusCodes = map[ErrorCode]int{
@@ -57,6 +58,7 @@ var errorStatusCodes = map[ErrorCode]int{
 	ErrRequestTimeTooSkewed:         http.StatusForbidden,
 	ErrSignatureDoesNotMatch:        http.StatusForbidden,
 	ErrXAmzContentSHA256Mismatch:    http.StatusBadRequest,
+	ErrPreconditionFailed:           http.StatusPreconditionFailed,
 	ErrEntityTooSmall:               http.StatusBadRequest,
 	ErrIncompleteBody:               http.StatusBadRequest,
 	ErrAuthorizationHeaderMalformed: http.StatusBadRequest,
@@ -86,6 +88,7 @@ var errorMessages = map[ErrorCode]string{
 	ErrRequestTimeTooSkewed:         "The difference between the request time and the server's time is too large.",
 	ErrSignatureDoesNotMatch:        "The request signature we calculated does not match the signature you provided.",
 	ErrXAmzContentSHA256Mismatch:    "The provided 'x-amz-content-sha256' header does not match what was computed.",
+	ErrPreconditionFailed:           "At least one of the pre-conditions you specified did not hold",
 	ErrEntityTooSmall:               "Your proposed upload is smaller than the minimum allowed object size.",
 	ErrIncompleteBody:               "You did not provide the number of bytes specified by the Content-Length HTTP header.",
 	ErrAuthorizationHeaderMalformed: "The authorization header is malformed.",
