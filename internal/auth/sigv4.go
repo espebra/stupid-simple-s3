@@ -283,28 +283,47 @@ func isValidIPHeader(value string) bool {
 
 // buildCanonicalHeaders creates the canonical headers string
 func (s *SignatureV4) buildCanonicalHeaders(r *http.Request, signedHeaders []string) (string, error) {
-	var headers []string
+	var headers strings.Builder
 
 	for _, h := range signedHeaders {
 		var value string
 		lowerH := strings.ToLower(h)
 		if lowerH == "host" {
-			value = r.Host
+			value = canonicalHeaderValue([]string{r.Host})
 		} else {
-			value = r.Header.Get(h)
+			value = canonicalHeaderValue(r.Header.Values(h))
 		}
-		// Trim whitespace and convert sequential spaces to single space
-		value = strings.TrimSpace(value)
 
 		// Validate IP-related headers contain valid IP addresses
 		if ipHeaders[lowerH] && !isValidIPHeader(value) {
 			return "", ErrInvalidIPHeader
 		}
 
-		headers = append(headers, lowerH+":"+value+"\n")
+		headers.WriteString(lowerH)
+		headers.WriteByte(':')
+		headers.WriteString(value)
+		headers.WriteByte('\n')
 	}
 
-	return strings.Join(headers, ""), nil
+	return headers.String(), nil
+}
+
+// canonicalHeaderValue returns the canonical form of a signed header's
+// values: each trimmed, with runs of spaces inside it collapsed to one
+// space, and joined with commas when the header was sent more than once.
+// This is how the AWS SDKs sign them, so a value such as an x-amz-meta-*
+// header with two spaces in a row only verifies when it is canonicalized
+// the same way. values is not modified; it can be the request's own.
+func canonicalHeaderValue(values []string) string {
+	if len(values) == 1 && !strings.Contains(values[0], "  ") {
+		return strings.TrimSpace(values[0])
+	}
+	canonical := make([]string, len(values))
+	for i, v := range values {
+		v = strings.Join(strings.FieldsFunc(v, func(r rune) bool { return r == ' ' }), " ")
+		canonical[i] = strings.TrimSpace(v)
+	}
+	return strings.Join(canonical, ",")
 }
 
 // buildStringToSign creates the string to sign

@@ -1325,3 +1325,35 @@ func TestAWSSDK_NonExistentKey(t *testing.T) {
 		t.Errorf("expected NoSuchKey error, got: %v", err)
 	}
 }
+
+// TestAWSSDK_HeaderWhitespace tests that signed header values with runs of
+// spaces verify. SigV4 collapses sequential spaces in canonical header
+// values, and the SDK signs x-amz-meta-* headers.
+func TestAWSSDK_HeaderWhitespace(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	ctx := context.Background()
+	client := ts.AWSClient(ctx)
+
+	_, err := client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:   aws.String(TestBucket),
+		Key:      aws.String("spaced"),
+		Body:     bytes.NewReader([]byte("data")),
+		Metadata: map[string]string{"note": "two  spaces   and three"},
+	})
+	if err != nil {
+		t.Fatalf("PutObject with spaces in metadata failed: %v", err)
+	}
+
+	head, err := client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(TestBucket),
+		Key:    aws.String("spaced"),
+	})
+	if err != nil {
+		t.Fatalf("HeadObject failed: %v", err)
+	}
+	if got := head.Metadata["note"]; got != "two  spaces   and three" {
+		t.Errorf("metadata = %q, want it stored as sent", got)
+	}
+}

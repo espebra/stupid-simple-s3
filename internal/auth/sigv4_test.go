@@ -279,6 +279,35 @@ func TestBuildCanonicalHeaders(t *testing.T) {
 	}
 }
 
+func TestBuildCanonicalHeadersWhitespace(t *testing.T) {
+	sigv4 := &SignatureV4{}
+
+	// As the AWS SDKs sign them: each value trimmed, runs of spaces
+	// collapsed, and repeated headers joined with commas
+	req := httptest.NewRequest("PUT", "/bucket/key", nil)
+	req.Host = "example.com"
+	req.Header.Set("X-Amz-Meta-Note", "  two  spaces   and three ")
+	req.Header.Add("X-Amz-Meta-Multi", "a  b")
+	req.Header.Add("X-Amz-Meta-Multi", " c ")
+
+	result, err := sigv4.buildCanonicalHeaders(req, []string{"host", "x-amz-meta-multi", "x-amz-meta-note"})
+	if err != nil {
+		t.Fatalf("buildCanonicalHeaders returned error: %v", err)
+	}
+	expected := "host:example.com\nx-amz-meta-multi:a b,c\nx-amz-meta-note:two spaces and three\n"
+	if result != expected {
+		t.Errorf("canonical headers:\ngot:  %q\nwant: %q", result, expected)
+	}
+
+	// The request's own header values are left as they were sent
+	if got := req.Header.Get("X-Amz-Meta-Note"); got != "  two  spaces   and three " {
+		t.Errorf("header modified to %q", got)
+	}
+	if got := req.Header.Values("X-Amz-Meta-Multi"); got[0] != "a  b" {
+		t.Errorf("header modified to %q", got)
+	}
+}
+
 func TestBuildCanonicalHeadersIPValidation(t *testing.T) {
 	sigv4 := &SignatureV4{}
 
