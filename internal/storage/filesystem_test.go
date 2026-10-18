@@ -1819,3 +1819,35 @@ func TestOpenFile(t *testing.T) {
 		t.Errorf("create in a missing directory: err = %v, want not exist", err)
 	}
 }
+
+// TestRename tests that rename replaces files and, like os.Rename, does not
+// replace a directory
+func TestRename(t *testing.T) {
+	dir := t.TempDir()
+	src, dst := filepath.Join(dir, "src"), filepath.Join(dir, "dst")
+	for _, f := range []string{src, dst} {
+		if err := os.WriteFile(f, []byte(f), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := rename(src, dst); err != nil {
+		t.Fatalf("rename over a file: %v", err)
+	}
+	if data, _ := os.ReadFile(dst); string(data) != src {
+		t.Errorf("dst holds %q, want %q", data, src)
+	}
+
+	sub := filepath.Join(dir, "sub")
+	if err := os.Mkdir(sub, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := rename(dst, sub); err == nil {
+		t.Error("rename of a file over a directory succeeded")
+	}
+	if info, err := os.Stat(sub); err != nil || !info.IsDir() {
+		t.Errorf("directory replaced: %v", err)
+	}
+	if err := rename(filepath.Join(dir, "missing"), dst); !os.IsNotExist(err) {
+		t.Errorf("rename of a missing file: err = %v, want not exist", err)
+	}
+}

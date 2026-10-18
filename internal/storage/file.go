@@ -38,3 +38,21 @@ func open(name string) (*os.File, error) {
 func create(name string) (*os.File, error) {
 	return openFile(name, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
 }
+
+// rename renames a file like os.Rename, with one system call less. Before
+// renaming, os.Rename lstats the new name to refuse to replace a
+// directory, but renaming a file over a directory fails anyway (EISDIR),
+// and storage only renames temp files into place.
+func rename(oldname, newname string) error {
+	var err error
+	for {
+		err = syscall.Rename(oldname, newname)
+		if err != syscall.EINTR {
+			break
+		}
+	}
+	if err != nil {
+		return &os.LinkError{Op: "rename", Old: oldname, New: newname, Err: err}
+	}
+	return nil
+}

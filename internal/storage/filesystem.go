@@ -675,12 +675,12 @@ func (fs *FilesystemStorage) commitObject(bucket, objPath, dataTmpPath, metaTmpP
 	defer commit.Unlock()
 
 	dataPath := filepath.Join(objPath, "data")
-	if err := os.Rename(dataTmpPath, dataPath); err != nil {
+	if err := rename(dataTmpPath, dataPath); err != nil {
 		_ = os.Remove(dataTmpPath)
 		_ = os.Remove(metaTmpPath)
 		return fmt.Errorf("renaming data file: %w", err)
 	}
-	if err := os.Rename(metaTmpPath, filepath.Join(objPath, "meta.json")); err != nil {
+	if err := rename(metaTmpPath, filepath.Join(objPath, "meta.json")); err != nil {
 		_ = os.Remove(metaTmpPath)
 		_ = os.Remove(dataPath)
 		return fmt.Errorf("renaming metadata file: %w", err)

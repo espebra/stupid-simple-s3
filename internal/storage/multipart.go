@@ -156,12 +156,12 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 	commit.Lock()
 	defer commit.Unlock()
 
-	if err := os.Rename(tmpPath, partPath); err != nil {
+	if err := rename(tmpPath, partPath); err != nil {
 		_ = os.Remove(tmpPath)
 		_ = os.Remove(partMetaTmpPath)
 		return nil, fmt.Errorf("renaming part file: %w", err)
 	}
-	if err := os.Rename(partMetaTmpPath, partMetaPath); err != nil {
+	if err := rename(partMetaTmpPath, partMetaPath); err != nil {
 		_ = os.Remove(partMetaTmpPath)
 		return nil, fmt.Errorf("renaming part metadata: %w", err)
 	}
