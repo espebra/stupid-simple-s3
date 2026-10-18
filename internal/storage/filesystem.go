@@ -323,7 +323,7 @@ func (fs *FilesystemStorage) createTempFiles(bucket string) (dataTmpFile *os.Fil
 	dataTmpPath = filepath.Join(dir, id+".data")
 	metaTmpPath = filepath.Join(dir, id+".meta")
 
-	dataTmpFile, err = os.Create(dataTmpPath)
+	dataTmpFile, err = create(dataTmpPath)
 	if os.IsNotExist(err) {
 		if err := os.Mkdir(dir, 0700); err != nil && !os.IsExist(err) {
 			if isMissingDirError(err) {
@@ -331,7 +331,7 @@ func (fs *FilesystemStorage) createTempFiles(bucket string) (dataTmpFile *os.Fil
 			}
 			return nil, "", "", fmt.Errorf("creating bucket temp directory: %w", err)
 		}
-		dataTmpFile, err = os.Create(dataTmpPath)
+		dataTmpFile, err = create(dataTmpPath)
 	}
 	if err != nil {
 		return nil, "", "", fmt.Errorf("creating temp file: %w", err)
@@ -633,7 +633,7 @@ func (fs *FilesystemStorage) openObject(objPath string) (*os.File, *s3.ObjectMet
 		return nil, nil, err
 	}
 
-	file, err := os.Open(filepath.Join(objPath, "data"))
+	file, err := open(filepath.Join(objPath, "data"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil, ErrObjectNotFound

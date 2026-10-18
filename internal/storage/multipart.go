@@ -71,7 +71,7 @@ func (fs *FilesystemStorage) CreateMultipartUpload(bucket, key string, contentTy
 	}
 
 	metaPath := filepath.Join(uploadPath, "meta.json")
-	metaFile, err := os.Create(metaPath)
+	metaFile, err := create(metaPath)
 	if err != nil {
 		_ = os.RemoveAll(uploadPath)
 		return "", fmt.Errorf("creating upload metadata: %w", err)
@@ -114,7 +114,7 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 	tmpID := uuid.New().String()
 	tmpPath := partPath + ".tmp." + tmpID
 
-	tmpFile, err := os.Create(tmpPath)
+	tmpFile, err := create(tmpPath)
 	if err != nil {
 		return nil, fmt.Errorf("creating part file: %w", err)
 	}
@@ -271,7 +271,7 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 		partFilename := fmt.Sprintf("part.%05d", part.PartNumber)
 		partPath := filepath.Join(uploadPath, partFilename)
 
-		partFile, err := os.Open(partPath)
+		partFile, err := open(partPath)
 		if err != nil {
 			_ = outFile.Close()
 			_ = os.Remove(tmpPath)
@@ -622,7 +622,7 @@ func partDigest(partMeta *s3.PartMetadata, partPath string) ([]byte, error) {
 	// (validateUploadID) and builds the directory with uploadDir, and the
 	// part number is an int formatted as "part.%05d", so neither can contain
 	// a path separator or "..".
-	f, err := os.Open(partPath)
+	f, err := open(partPath)
 	if err != nil {
 		return nil, err
 	}
@@ -654,7 +654,7 @@ var metaBufferPool = sync.Pool{
 // strings, so structs of strings, numbers, times and maps are fine. A
 // missing file gives an error that matches os.ErrNotExist.
 func readJSONFile(path string, v any) error {
-	f, err := os.Open(path)
+	f, err := open(path)
 	if err != nil {
 		return err
 	}
@@ -683,7 +683,7 @@ func readJSONFile(path string, v any) error {
 
 // writeJSONFile writes v as JSON to a new file at path
 func writeJSONFile(path string, v any) error {
-	f, err := os.Create(path)
+	f, err := create(path)
 	if err != nil {
 		return err
 	}

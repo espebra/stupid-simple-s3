@@ -1753,3 +1753,69 @@ func TestListObjectsMarker(t *testing.T) {
 		t.Errorf("IsTruncated %v NextMarker %q, want true %q", result.IsTruncated, result.NextMarker, "dir/")
 	}
 }
+
+// TestOpenFile tests the open and create helpers against what os.Open and
+// os.Create do
+func TestOpenFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file")
+
+	f, err := create(path)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := f.WriteString("hello world"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	// os.Create uses 0666 before the umask
+	if want, err := os.Create(filepath.Join(dir, "reference")); err == nil {
+		wantInfo, _ := want.Stat()
+		_ = want.Close()
+		if info.Mode() != wantInfo.Mode() {
+			t.Errorf("mode = %v, want %v as with os.Create", info.Mode(), wantInfo.Mode())
+		}
+	}
+
+	// create truncates an existing file
+	f, err = create(path)
+	if err != nil {
+		t.Fatalf("create existing: %v", err)
+	}
+	_ = f.Close()
+	if info, _ := os.Stat(path); info.Size() != 0 {
+		t.Errorf("size after create = %d, want 0", info.Size())
+	}
+	if err := os.WriteFile(path, []byte("hello world"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err = open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.Seek(6, io.SeekStart); err != nil {
+		t.Fatalf("seek: %v", err)
+	}
+	data, err := io.ReadAll(f)
+	if err != nil || string(data) != "world" {
+		t.Errorf("read after seek = %q, %v, want %q", data, err, "world")
+	}
+	if _, err := f.Write([]byte("x")); err == nil {
+		t.Error("write to a file opened for reading succeeded")
+	}
+
+	if _, err := open(filepath.Join(dir, "missing")); !errors.Is(err, os.ErrNotExist) || !os.IsNotExist(err) {
+		t.Errorf("open of a missing file: err = %v, want one matching os.ErrNotExist", err)
+	}
+	if _, err := create(filepath.Join(dir, "missing-dir", "file")); !os.IsNotExist(err) {
+		t.Errorf("create in a missing directory: err = %v, want not exist", err)
+	}
+}
