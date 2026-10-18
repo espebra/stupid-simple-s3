@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -40,8 +41,52 @@ var (
 	ErrSignatureMismatch    = errors.New("signature mismatch")
 )
 
-// SignatureV4 handles AWS Signature Version 4 verification
-type SignatureV4 struct{}
+// SignatureV4 handles AWS Signature Version 4 verification. The zero value
+// is ready to use, and it is safe for concurrent use.
+type SignatureV4 struct {
+	// signingKeys caches derived signing keys. A signing key depends only
+	// on the secret key, date, region and service, so it changes once a
+	// day per credential, while deriving it takes four HMAC-SHA256
+	// computations. Only the keys of requests whose signature verified are
+	// added, so clients without a valid secret key cannot fill it. The
+	// cached slices are shared and must not be modified.
+	signingKeysMu sync.RWMutex
+	signingKeys   map[signingKeyID][]byte
+}
+
+// signingKeyID identifies a derived signing key
+type signingKeyID struct {
+	secretKey, date, region, service string
+}
+
+// maxCachedSigningKeys bounds SignatureV4.signingKeys. Only a few keys are
+// in use at a time, one per credential, region and service for the current
+// day (and the previous one around midnight), so the cache is simply
+// cleared when it is full.
+const maxCachedSigningKeys = 64
+
+// signingKey returns the signing key for id, and whether it came from the
+// cache. A key that did not should be passed to cacheSigningKey once a
+// signature made with it has verified.
+func (s *SignatureV4) signingKey(id signingKeyID) (key []byte, cached bool) {
+	s.signingKeysMu.RLock()
+	key, cached = s.signingKeys[id]
+	s.signingKeysMu.RUnlock()
+	if cached {
+		return key, true
+	}
+	return s.deriveSigningKey(id.secretKey, id.date, id.region, id.service), false
+}
+
+// cacheSigningKey adds a signing key that verified a signature to the cache
+func (s *SignatureV4) cacheSigningKey(id signingKeyID, key []byte) {
+	s.signingKeysMu.Lock()
+	defer s.signingKeysMu.Unlock()
+	if s.signingKeys == nil || len(s.signingKeys) >= maxCachedSigningKeys {
+		s.signingKeys = make(map[signingKeyID][]byte)
+	}
+	s.signingKeys[id] = key
+}
 
 // AuthResult contains the result of signature verification
 type AuthResult struct {
@@ -223,12 +268,16 @@ func (s *SignatureV4) VerifyRequest(r *http.Request, secretKey string) (*AuthRes
 	stringToSign := s.buildStringToSign(amzDate, credentialScope, canonicalRequest)
 
 	// Calculate expected signature
-	signingKey := s.deriveSigningKey(secretKey, parsed.Date, parsed.Region, parsed.Service)
+	keyID := signingKeyID{secretKey, parsed.Date, parsed.Region, parsed.Service}
+	signingKey, cached := s.signingKey(keyID)
 	expectedSignature := hex.EncodeToString(hmacSHA256(signingKey, []byte(stringToSign)))
 
 	// Compare signatures
 	if !hmac.Equal([]byte(expectedSignature), []byte(parsed.Signature)) {
 		return nil, ErrSignatureMismatch
+	}
+	if !cached {
+		s.cacheSigningKey(keyID, signingKey)
 	}
 
 	result := &AuthResult{
@@ -560,12 +609,16 @@ func (s *SignatureV4) VerifyPresignedRequest(r *http.Request, secretKey string) 
 	stringToSign := s.buildStringToSign(parsed.AmzDate, credentialScope, canonicalRequest)
 
 	// Calculate expected signature
-	signingKey := s.deriveSigningKey(secretKey, parsed.Date, parsed.Region, parsed.Service)
+	keyID := signingKeyID{secretKey, parsed.Date, parsed.Region, parsed.Service}
+	signingKey, cached := s.signingKey(keyID)
 	expectedSignature := hex.EncodeToString(hmacSHA256(signingKey, []byte(stringToSign)))
 
 	// Compare signatures
 	if !hmac.Equal([]byte(expectedSignature), []byte(parsed.Signature)) {
 		return nil, ErrSignatureMismatch
+	}
+	if !cached {
+		s.cacheSigningKey(keyID, signingKey)
 	}
 
 	return &AuthResult{

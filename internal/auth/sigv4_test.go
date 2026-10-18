@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -790,5 +791,44 @@ func TestBuildPresignedCanonicalQueryString(t *testing.T) {
 				t.Errorf("got %q, want %q", result, tt.expect)
 			}
 		})
+	}
+}
+
+func TestSigningKeyCache(t *testing.T) {
+	const secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	sigv4 := &SignatureV4{}
+
+	// A request that fails verification does not add its key
+	if _, err := sigv4.VerifyRequest(createSignedRequest("GET", "/bucket/key", secret, "AKID"), "wrong-secret"); err == nil {
+		t.Fatal("request signed with another secret verified")
+	}
+	if n := len(sigv4.signingKeys); n != 0 {
+		t.Fatalf("failed verification cached %d keys", n)
+	}
+
+	// A verified request adds its key, and later requests verify with it
+	for range 3 {
+		if _, err := sigv4.VerifyRequest(createSignedRequest("GET", "/bucket/key", secret, "AKID"), secret); err != nil {
+			t.Fatalf("VerifyRequest: %v", err)
+		}
+	}
+	if n := len(sigv4.signingKeys); n != 1 {
+		t.Fatalf("cached %d keys, want 1", n)
+	}
+
+	// The cached key is only used for the secret it was derived from
+	if _, err := sigv4.VerifyRequest(createSignedRequest("GET", "/bucket/key", secret, "AKID"), "wrong-secret"); err == nil {
+		t.Fatal("request verified with another secret after its key was cached")
+	}
+
+	// The cache does not grow past its limit
+	for i := range 2 * maxCachedSigningKeys {
+		other := fmt.Sprintf("secret-%d", i)
+		if _, err := sigv4.VerifyRequest(createSignedRequest("GET", "/bucket/key", other, "AKID"), other); err != nil {
+			t.Fatalf("VerifyRequest: %v", err)
+		}
+	}
+	if n := len(sigv4.signingKeys); n > maxCachedSigningKeys {
+		t.Errorf("cache holds %d keys, limit is %d", n, maxCachedSigningKeys)
 	}
 }
