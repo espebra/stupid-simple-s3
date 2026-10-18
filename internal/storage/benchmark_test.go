@@ -76,6 +76,36 @@ func BenchmarkPutObject(b *testing.B) {
 	}
 }
 
+// streamReader hides the WriterTo of the reader it wraps, so that copying
+// from it works as copying from an HTTP request body does
+type streamReader struct{ io.Reader }
+
+// BenchmarkPutObjectStream stores objects read from a reader without
+// WriterTo, like the request bodies the server stores
+func BenchmarkPutObjectStream(b *testing.B) {
+	for _, size := range []int{1024, 1024 * 1024} {
+		b.Run(fmt.Sprintf("size=%d", size), func(b *testing.B) {
+			storage, cleanup := setupBenchStorage(b)
+			defer cleanup()
+
+			content := make([]byte, size)
+			_, _ = rand.Read(content)
+
+			b.SetBytes(int64(size))
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				key := fmt.Sprintf("bench-object-%d", i)
+				body := streamReader{bytes.NewReader(content)}
+				if _, err := storage.PutObject(benchBucket, key, "application/octet-stream", nil, body); err != nil {
+					b.Fatalf("PutObject failed: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkGetObject(b *testing.B) {
 	sizes := []int{
 		1 * 1024,         // 1KB

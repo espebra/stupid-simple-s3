@@ -122,7 +122,7 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 	hash := sha256.New()
 	writer := io.MultiWriter(tmpFile, hash)
 
-	size, err := io.Copy(writer, body)
+	size, err := copyBuffered(writer, body)
 	if err != nil {
 		_ = tmpFile.Close()
 		_ = os.Remove(tmpPath)

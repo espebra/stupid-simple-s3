@@ -525,7 +525,7 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 	hash := sha256.New()
 	writer := io.MultiWriter(tmpFile, hash)
 
-	size, err := io.Copy(writer, body)
+	size, err := copyBuffered(writer, body)
 	if err != nil {
 		_ = tmpFile.Close()
 		_ = os.Remove(tmpPath)
@@ -894,6 +894,28 @@ func (fs *FilesystemStorage) CopyObject(srcBucket, srcKey, dstBucket, dstKey str
 	}
 
 	return dstMeta, nil
+}
+
+// copyBufferSize is the size of the buffers in copyBufferPool, the same as
+// io.Copy uses
+const copyBufferSize = 32 * 1024
+
+// copyBufferPool holds the buffers that request bodies are copied to disk
+// through. A request body is not an io.WriterTo and the destination, which
+// also hashes the data, is not an io.ReaderFrom, so io.Copy would allocate
+// a new buffer for every upload.
+var copyBufferPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, copyBufferSize)
+		return &buf
+	},
+}
+
+// copyBuffered is io.Copy with a buffer from copyBufferPool
+func copyBuffered(dst io.Writer, src io.Reader) (int64, error) {
+	buf := copyBufferPool.Get().(*[]byte)
+	defer copyBufferPool.Put(buf)
+	return io.CopyBuffer(dst, src, *buf)
 }
 
 // getUploadLock returns the per-upload RWMutex for uploadID, creating it if needed.
