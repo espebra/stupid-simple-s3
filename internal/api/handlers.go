@@ -1289,7 +1289,7 @@ func parseMaxKeys(query url.Values) int {
 // listObjectsContents converts listed objects and common prefixes to the
 // elements of a listing response
 func listObjectsContents(result *storage.ListObjectsResult) ([]s3.Object, []s3.Prefix) {
-	var objects []s3.Object
+	objects := make([]s3.Object, 0, len(result.Objects))
 	for _, obj := range result.Objects {
 		objects = append(objects, s3.Object{
 			Key:          obj.Key,
@@ -1300,7 +1300,7 @@ func listObjectsContents(result *storage.ListObjectsResult) ([]s3.Object, []s3.P
 		})
 	}
 
-	var commonPrefixes []s3.Prefix
+	commonPrefixes := make([]s3.Prefix, 0, len(result.CommonPrefixes))
 	for _, prefix := range result.CommonPrefixes {
 		commonPrefixes = append(commonPrefixes, s3.Prefix{Prefix: prefix})
 	}
