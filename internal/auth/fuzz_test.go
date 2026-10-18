@@ -3,17 +3,37 @@ package auth
 import (
 	"net/http"
 	"net/url"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
 
-// FuzzParseAuthorization tests the ParseAuthorization function with random inputs
-// to find crashes or panics when parsing malformed authorization headers.
+// authorizationRegex is the regular expression ParseAuthorization used to
+// match the Authorization header with. ParseAuthorization must accept
+// exactly the headers it matches, and extract the same parts.
+var authorizationRegex = regexp.MustCompile(
+	`^AWS4-HMAC-SHA256\s+` +
+		`Credential=([^/]+)/(\d{8})/([^/]+)/([^/]+)/aws4_request,\s*` +
+		`SignedHeaders=([^,]+),\s*` +
+		`Signature=([a-f0-9]+)$`,
+)
+
+// FuzzParseAuthorization tests that ParseAuthorization never panics, and
+// that it accepts the same headers as authorizationRegex and extracts the
+// same parts from them.
 //
 // Run with: go test -fuzz=FuzzParseAuthorization -fuzztime=30s ./internal/auth/
 func FuzzParseAuthorization(f *testing.F) {
 	// Add seed corpus with valid and edge-case inputs
 	f.Add("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=fe5f80f77d5fa3beca038a248ff027d0445342fe2855ddc963176630326f1024")
+	f.Add("AWS4-HMAC-SHA256\t\n Credential=A,B C/20130524/r\n/s/aws4_request,SignedHeaders=host,\r\fSignature=0a")
+	f.Add("AWS4-HMAC-SHA256 Credential=key/2013052/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=ab")
+	f.Add("AWS4-HMAC-SHA256 Credential=key/20130524/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=AB")
+	f.Add("AWS4-HMAC-SHA256 Credential=key/20130524/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=ab ")
+	f.Add("AWS4-HMAC-SHA256 Credential=key/20130524//s3/aws4_request, SignedHeaders=host, Signature=ab")
+	f.Add("AWS4-HMAC-SHA256 Credential=key/20130524/us-east-1/s3/aws4_request, SignedHeaders=a,b, Signature=ab")
+	f.Add("AWS4-HMAC-SHA256Credential=key/20130524/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=ab")
 	f.Add("")
 	f.Add("AWS4-HMAC-SHA256")
 	f.Add("AWS4-HMAC-SHA256 Credential=")
@@ -24,8 +44,18 @@ func FuzzParseAuthorization(f *testing.F) {
 	sigv4 := &SignatureV4{}
 
 	f.Fuzz(func(t *testing.T, authHeader string) {
-		// This should never panic, regardless of input
-		_, _ = sigv4.ParseAuthorization(authHeader)
+		parsed, err := sigv4.ParseAuthorization(authHeader)
+		m := authorizationRegex.FindStringSubmatch(authHeader)
+		if (err == nil) != (m != nil) {
+			t.Fatalf("ParseAuthorization(%q) error = %v, but regex match = %v", authHeader, err, m != nil)
+		}
+		if m == nil {
+			return
+		}
+		got := []string{parsed.AccessKeyID, parsed.Date, parsed.Region, parsed.Service, strings.Join(parsed.SignedHeaders, ";"), parsed.Signature}
+		if !slices.Equal(got, m[1:]) {
+			t.Fatalf("ParseAuthorization(%q) = %q, regex = %q", authHeader, got, m[1:])
+		}
 	})
 }
 

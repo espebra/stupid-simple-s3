@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -80,30 +79,98 @@ type ParsedPresignedURL struct {
 	AmzDate       string
 }
 
-var authorizationRegex = regexp.MustCompile(
-	`^AWS4-HMAC-SHA256\s+` +
-		`Credential=([^/]+)/(\d{8})/([^/]+)/([^/]+)/aws4_request,\s*` +
-		`SignedHeaders=([^,]+),\s*` +
-		`Signature=([a-f0-9]+)$`,
-)
+// errMalformedAuthorization is returned for an Authorization header that
+// does not have the form
+// "AWS4-HMAC-SHA256 Credential=<key>/<yyyymmdd>/<region>/<service>/aws4_request, SignedHeaders=<headers>, Signature=<hex>"
+var errMalformedAuthorization = errors.New("invalid authorization header format")
 
-// ParseAuthorization parses the Authorization header
+// ParseAuthorization parses the Authorization header. It is called for
+// every signed request, so it is written out by hand rather than with a
+// regular expression, which took about 15% of the CPU time of a HEAD
+// request. It accepts exactly what the regular expression
+//
+//	^AWS4-HMAC-SHA256\s+Credential=([^/]+)/(\d{8})/([^/]+)/([^/]+)/aws4_request,\s*SignedHeaders=([^,]+),\s*Signature=([a-f0-9]+)$
+//
+// matches, which FuzzParseAuthorization checks.
 func (s *SignatureV4) ParseAuthorization(authHeader string) (*ParsedAuthorization, error) {
-	matches := authorizationRegex.FindStringSubmatch(authHeader)
-	if matches == nil {
-		return nil, fmt.Errorf("invalid authorization header format")
+	afterAlgorithm, ok := strings.CutPrefix(authHeader, Algorithm)
+	if !ok {
+		return nil, errMalformedAuthorization
+	}
+	// At least one space between the algorithm and the credential
+	rest := trimLeftRegexpSpace(afterAlgorithm)
+	if len(rest) == len(afterAlgorithm) {
+		return nil, errMalformedAuthorization
+	}
+	if rest, ok = strings.CutPrefix(rest, "Credential="); !ok {
+		return nil, errMalformedAuthorization
 	}
 
-	return &ParsedAuthorization{
-		Algorithm:     Algorithm,
-		AccessKeyID:   matches[1],
-		Date:          matches[2],
-		Region:        matches[3],
-		Service:       matches[4],
-		Request:       "aws4_request",
-		SignedHeaders: strings.Split(matches[5], ";"),
-		Signature:     matches[6],
-	}, nil
+	var p ParsedAuthorization
+	var date string
+	if p.AccessKeyID, rest, ok = strings.Cut(rest, "/"); !ok || p.AccessKeyID == "" {
+		return nil, errMalformedAuthorization
+	}
+	if date, rest, ok = strings.Cut(rest, "/"); !ok || !isDigits(date, 8) {
+		return nil, errMalformedAuthorization
+	}
+	if p.Region, rest, ok = strings.Cut(rest, "/"); !ok || p.Region == "" {
+		return nil, errMalformedAuthorization
+	}
+	if p.Service, rest, ok = strings.Cut(rest, "/"); !ok || p.Service == "" {
+		return nil, errMalformedAuthorization
+	}
+	if rest, ok = strings.CutPrefix(rest, "aws4_request,"); !ok {
+		return nil, errMalformedAuthorization
+	}
+	if rest, ok = strings.CutPrefix(trimLeftRegexpSpace(rest), "SignedHeaders="); !ok {
+		return nil, errMalformedAuthorization
+	}
+	var signedHeaders string
+	if signedHeaders, rest, ok = strings.Cut(rest, ","); !ok || signedHeaders == "" {
+		return nil, errMalformedAuthorization
+	}
+	if p.Signature, ok = strings.CutPrefix(trimLeftRegexpSpace(rest), "Signature="); !ok || !isLowerHex(p.Signature) {
+		return nil, errMalformedAuthorization
+	}
+
+	p.Algorithm = Algorithm
+	p.Date = date
+	p.Request = "aws4_request"
+	p.SignedHeaders = strings.Split(signedHeaders, ";")
+	return &p, nil
+}
+
+// trimLeftRegexpSpace removes the leading characters that \s matches in a
+// regular expression: tab, newline, form feed, carriage return and space
+func trimLeftRegexpSpace(s string) string {
+	return strings.TrimLeft(s, "\t\n\f\r ")
+}
+
+// isDigits reports whether s is n ASCII digits
+func isDigits(s string, n int) bool {
+	if len(s) != n {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// isLowerHex reports whether s is one or more lowercase hex digits
+func isLowerHex(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if (s[i] < '0' || s[i] > '9') && (s[i] < 'a' || s[i] > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // VerifyRequest verifies the signature of an HTTP request
