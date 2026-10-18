@@ -270,6 +270,7 @@ func parseEnvInt64(key string, defaultValue int64) int64 {
 		if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
 			return parsed
 		}
+		warnInvalidValue(key, value, strconv.FormatInt(defaultValue, 10))
 	}
 	return defaultValue
 }
@@ -279,8 +280,16 @@ func parseEnvDuration(key string, defaultValue time.Duration) time.Duration {
 		if parsed, err := time.ParseDuration(value); err == nil {
 			return parsed
 		}
+		warnInvalidValue(key, value, defaultValue.String())
 	}
 	return defaultValue
+}
+
+// warnInvalidValue logs that an environment variable could not be parsed
+// and its default is used instead, so that a value such as "60" for a
+// duration, which needs a unit, is not ignored silently
+func warnInvalidValue(key, value, defaultValue string) {
+	slog.Warn("ignoring invalid configuration value, using the default", "variable", key, "value", value, "default", defaultValue)
 }
 
 func (c *Config) validate() error {

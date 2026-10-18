@@ -1,7 +1,9 @@
 package config
 
 import (
+	"log/slog"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -452,5 +454,27 @@ func TestLoadMetricsAndPprof(t *testing.T) {
 				t.Errorf("Pprof.Enabled = %v, want %v", cfg.Pprof.Enabled, tt.wantPprof)
 			}
 		})
+	}
+}
+
+func TestInvalidValuesAreLogged(t *testing.T) {
+	var logs strings.Builder
+	defaultLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(defaultLogger)
+
+	t.Setenv("STUPID_READ_TIMEOUT", "60")
+	t.Setenv("STUPID_MAX_OBJECT_SIZE", "10G")
+
+	if got := parseEnvDuration("STUPID_READ_TIMEOUT", DefaultReadTimeout); got != DefaultReadTimeout {
+		t.Errorf("parseEnvDuration = %v, want the default %v", got, DefaultReadTimeout)
+	}
+	if got := parseEnvInt64("STUPID_MAX_OBJECT_SIZE", DefaultMaxObjectSize); got != DefaultMaxObjectSize {
+		t.Errorf("parseEnvInt64 = %v, want the default %v", got, DefaultMaxObjectSize)
+	}
+	for _, name := range []string{"STUPID_READ_TIMEOUT", "STUPID_MAX_OBJECT_SIZE"} {
+		if !strings.Contains(logs.String(), "variable="+name) {
+			t.Errorf("no warning logged for %s: %s", name, logs.String())
+		}
 	}
 }
