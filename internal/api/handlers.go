@@ -821,6 +821,7 @@ func (h *Handlers) HeadObject(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("ETag", meta.ETag)
 	w.Header().Set("Last-Modified", meta.LastModified.UTC().Format(http.TimeFormat))
 	setChecksumHeaders(w, meta.ChecksumSHA256)
+	w.Header().Set("Accept-Ranges", "bytes")
 
 	// Set user metadata headers
 	for k, v := range meta.UserMetadata {

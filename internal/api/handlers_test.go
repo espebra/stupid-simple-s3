@@ -339,6 +339,11 @@ func TestHeadObject(t *testing.T) {
 		t.Error("ETag header is empty")
 	}
 
+	// As for GET, so clients can tell from a HEAD that ranges work
+	if got := w.Header().Get("Accept-Ranges"); got != "bytes" {
+		t.Errorf("Accept-Ranges = %q, want %q", got, "bytes")
+	}
+
 	// HEAD should return no body
 	if w.Body.Len() != 0 {
 		t.Errorf("HEAD response should have no body, got %d bytes", w.Body.Len())
