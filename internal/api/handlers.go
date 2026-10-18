@@ -1155,9 +1155,7 @@ func (h *Handlers) GetBucket(w http.ResponseWriter, r *http.Request) {
 		h.ListObjectsV2(w, r)
 		return
 	}
-
-	// Default to ListObjectsV2 behavior for simplicity
-	h.ListObjectsV2(w, r)
+	h.ListObjectsV1(w, r)
 }
 
 // GetBucketLocation handles GET /{bucket}?location. The service has no
@@ -1242,11 +1240,9 @@ func (h *Handlers) ListMultipartUploads(w http.ResponseWriter, r *http.Request) 
 	_ = xml.NewEncoder(w).Encode(result)
 }
 
-// ListObjectsV2 handles GET /{bucket}?list-type=2
-func (h *Handlers) ListObjectsV2(w http.ResponseWriter, r *http.Request) {
-	bucket := r.PathValue("bucket")
-	query := r.URL.Query()
-
+// parseMaxKeys returns the max-keys of a listing request, capped at
+// maxKeysLimit
+func parseMaxKeys(query url.Values) int {
 	maxKeys := maxKeysLimit
 	if maxKeysStr := query.Get("max-keys"); maxKeysStr != "" {
 		if mk, err := strconv.Atoi(maxKeysStr); err == nil && mk > 0 {
@@ -1257,6 +1253,79 @@ func (h *Handlers) ListObjectsV2(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	return maxKeys
+}
+
+// listObjectsContents converts listed objects and common prefixes to the
+// elements of a listing response
+func listObjectsContents(result *storage.ListObjectsResult) ([]s3.Object, []s3.Prefix) {
+	var objects []s3.Object
+	for _, obj := range result.Objects {
+		objects = append(objects, s3.Object{
+			Key:          obj.Key,
+			LastModified: obj.LastModified,
+			ETag:         obj.ETag,
+			Size:         obj.Size,
+			StorageClass: "STANDARD",
+		})
+	}
+
+	var commonPrefixes []s3.Prefix
+	for _, prefix := range result.CommonPrefixes {
+		commonPrefixes = append(commonPrefixes, s3.Prefix{Prefix: prefix})
+	}
+	return objects, commonPrefixes
+}
+
+// ListObjectsV1 handles GET /{bucket} without list-type=2: ListObjects
+// version 1, which pages with marker and NextMarker
+func (h *Handlers) ListObjectsV1(w http.ResponseWriter, r *http.Request) {
+	bucket := r.PathValue("bucket")
+	query := r.URL.Query()
+	maxKeys := parseMaxKeys(query)
+
+	opts := storage.ListObjectsOptions{
+		Prefix:    query.Get("prefix"),
+		Delimiter: query.Get("delimiter"),
+		MaxKeys:   maxKeys,
+		Marker:    query.Get("marker"),
+	}
+
+	result, err := h.storage.ListObjects(bucket, opts)
+	if err != nil {
+		slog.Error("failed to list objects", "error", err, "bucket", bucket, "prefix", opts.Prefix, "request_id", GetRequestID(r))
+		s3.WriteErrorResponse(w, s3.ErrInternalError)
+		return
+	}
+
+	objects, commonPrefixes := listObjectsContents(result)
+	response := s3.ListBucketResultV1{
+		Xmlns:          "http://s3.amazonaws.com/doc/2006-03-01/",
+		Name:           bucket,
+		Prefix:         opts.Prefix,
+		Marker:         opts.Marker,
+		MaxKeys:        maxKeys,
+		Delimiter:      opts.Delimiter,
+		IsTruncated:    result.IsTruncated,
+		Contents:       objects,
+		CommonPrefixes: commonPrefixes,
+	}
+	// S3 only returns NextMarker with a delimiter. Without one, clients
+	// continue from the last key, which is the same.
+	if result.IsTruncated && opts.Delimiter != "" {
+		response.NextMarker = result.NextMarker
+	}
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_ = xml.NewEncoder(w).Encode(response)
+}
+
+// ListObjectsV2 handles GET /{bucket}?list-type=2
+func (h *Handlers) ListObjectsV2(w http.ResponseWriter, r *http.Request) {
+	bucket := r.PathValue("bucket")
+	query := r.URL.Query()
+	maxKeys := parseMaxKeys(query)
 
 	opts := storage.ListObjectsOptions{
 		Prefix:            query.Get("prefix"),
@@ -1273,23 +1342,7 @@ func (h *Handlers) ListObjectsV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build response
-	var objects []s3.Object
-	for _, obj := range result.Objects {
-		objects = append(objects, s3.Object{
-			Key:          obj.Key,
-			LastModified: obj.LastModified,
-			ETag:         obj.ETag,
-			Size:         obj.Size,
-			StorageClass: "STANDARD",
-		})
-	}
-
-	var commonPrefixes []s3.Prefix
-	for _, prefix := range result.CommonPrefixes {
-		commonPrefixes = append(commonPrefixes, s3.Prefix{Prefix: prefix})
-	}
-
+	objects, commonPrefixes := listObjectsContents(result)
 	response := s3.ListBucketResultV2{
 		Xmlns:                 "http://s3.amazonaws.com/doc/2006-03-01/",
 		Name:                  bucket,

@@ -840,6 +840,16 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 	result := &ListObjectsResult{}
 	startKey := opts.StartAfter
 	skipPrefix := ""
+	if opts.Marker != "" {
+		startKey = opts.Marker
+		// A marker that is a common prefix ended the previous page, so the
+		// keys under it were rolled up into it and must not be listed again
+		if rest, ok := strings.CutPrefix(opts.Marker, opts.Prefix); ok && opts.Delimiter != "" {
+			if i := strings.Index(rest, opts.Delimiter); i >= 0 && i+len(opts.Delimiter) == len(rest) {
+				skipPrefix = opts.Marker
+			}
+		}
+	}
 	if opts.ContinuationToken != "" {
 		// Decode continuation token (see listToken)
 		decoded, err := base64.URLEncoding.DecodeString(opts.ContinuationToken)
@@ -880,6 +890,7 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 	truncate := func() bool {
 		result.IsTruncated = true
 		result.NextContinuationToken = listToken(last, lastIsPrefix)
+		result.NextMarker = last
 		return false
 	}
 	for done := false; !done; {

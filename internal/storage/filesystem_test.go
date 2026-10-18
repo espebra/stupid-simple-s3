@@ -1705,3 +1705,51 @@ func TestReadJSONFile(t *testing.T) {
 		t.Errorf("readJSONFile of missing file: err = %v, want os.ErrNotExist", err)
 	}
 }
+
+// TestListObjectsMarker tests the marker of ListObjects version 1: the
+// listing starts after it, and with a delimiter, a marker that is a common
+// prefix skips all keys under it
+func TestListObjectsMarker(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	for _, key := range []string{"a", "dir/x", "dir/y", "dirt", "z"} {
+		if _, err := storage.PutObject(testBucket, key, "text/plain", nil, bytes.NewReader([]byte("x"))); err != nil {
+			t.Fatalf("PutObject failed: %v", err)
+		}
+	}
+
+	for _, tc := range []struct {
+		marker, delimiter string
+		wantObjects       []string
+		wantPrefixes      []string
+	}{
+		{"a", "", []string{"dir/x", "dir/y", "dirt", "z"}, nil},
+		{"dir/x", "", []string{"dir/y", "dirt", "z"}, nil},
+		{"a", "/", []string{"dirt", "z"}, []string{"dir/"}},
+		{"dir/", "/", []string{"dirt", "z"}, nil},
+		{"dir/x", "/", []string{"dirt", "z"}, []string{"dir/"}},
+	} {
+		result, err := storage.ListObjects(testBucket, ListObjectsOptions{Marker: tc.marker, Delimiter: tc.delimiter})
+		if err != nil {
+			t.Fatalf("ListObjects failed: %v", err)
+		}
+		var objects []string
+		for _, obj := range result.Objects {
+			objects = append(objects, obj.Key)
+		}
+		if !slices.Equal(objects, tc.wantObjects) || !slices.Equal(result.CommonPrefixes, tc.wantPrefixes) {
+			t.Errorf("marker %q delimiter %q: objects %v prefixes %v, want %v %v",
+				tc.marker, tc.delimiter, objects, result.CommonPrefixes, tc.wantObjects, tc.wantPrefixes)
+		}
+	}
+
+	// A truncated page reports its last entry as the next marker
+	result, err := storage.ListObjects(testBucket, ListObjectsOptions{Delimiter: "/", MaxKeys: 2})
+	if err != nil {
+		t.Fatalf("ListObjects failed: %v", err)
+	}
+	if !result.IsTruncated || result.NextMarker != "dir/" {
+		t.Errorf("IsTruncated %v NextMarker %q, want true %q", result.IsTruncated, result.NextMarker, "dir/")
+	}
+}

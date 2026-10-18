@@ -3,9 +3,11 @@ package integration
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1020,4 +1022,61 @@ func writeFile(path string, content []byte) error {
 
 func readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+// TestMinioSDK_ListObjectsV1 tests that listing with ListObjects version 1,
+// which pages with marker instead of a continuation token, returns every
+// object once
+func TestMinioSDK_ListObjectsV1(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	client, err := ts.MinioClient()
+	if err != nil {
+		t.Fatalf("failed to create Minio client: %v", err)
+	}
+	ctx := context.Background()
+
+	var want []string
+	for i := range 7 {
+		key := fmt.Sprintf("v1/obj-%d", i)
+		want = append(want, key)
+		if _, err := client.PutObject(ctx, TestBucket, key, bytes.NewReader([]byte("x")), 1, minio.PutObjectOptions{}); err != nil {
+			t.Fatalf("PutObject failed: %v", err)
+		}
+	}
+	for _, key := range []string{"v1/dir-a/x", "v1/dir-a/y", "v1/dir-b/x"} {
+		if _, err := client.PutObject(ctx, TestBucket, key, bytes.NewReader([]byte("x")), 1, minio.PutObjectOptions{}); err != nil {
+			t.Fatalf("PutObject failed: %v", err)
+		}
+	}
+
+	list := func(t *testing.T, opts minio.ListObjectsOptions) []string {
+		var keys []string
+		for obj := range client.ListObjects(ctx, TestBucket, opts) {
+			if obj.Err != nil {
+				t.Fatalf("ListObjects: %v", obj.Err)
+			}
+			keys = append(keys, obj.Key)
+			if len(keys) > 100 {
+				t.Fatalf("ListObjects does not end, listed %v", keys[:20])
+			}
+		}
+		return keys
+	}
+
+	t.Run("recursive", func(t *testing.T) {
+		got := list(t, minio.ListObjectsOptions{Prefix: "v1/obj-", UseV1: true, MaxKeys: 2, Recursive: true})
+		if !slices.Equal(got, want) {
+			t.Errorf("listed %v, want %v", got, want)
+		}
+	})
+
+	t.Run("with delimiter", func(t *testing.T) {
+		got := list(t, minio.ListObjectsOptions{Prefix: "v1/", UseV1: true, MaxKeys: 2})
+		wantDelim := append([]string{"v1/dir-a/", "v1/dir-b/"}, want...)
+		if !slices.Equal(got, wantDelim) {
+			t.Errorf("listed %v, want %v", got, wantDelim)
+		}
+	})
 }

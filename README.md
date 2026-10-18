@@ -227,6 +227,7 @@ ETags are derived from the same digests: `"sha256-<hex>"` for objects and parts,
 | DeleteBucket | DELETE | `/{bucket}` |
 | HeadBucket | HEAD | `/{bucket}` |
 | GetBucketLocation | GET | `/{bucket}?location` |
+| ListObjects | GET | `/{bucket}` |
 | ListObjectsV2 | GET | `/{bucket}?list-type=2` |
 | PutObject | PUT | `/{bucket}/{key}` |
 | CopyObject | PUT | `/{bucket}/{key}` with `x-amz-copy-source` header |
@@ -247,6 +248,7 @@ Notes:
 - As in S3, every part of a multipart upload except the last must be at least 5 MiB. CompleteMultipartUpload fails with `EntityTooSmall` otherwise.
 - ListMultipartUploads supports `prefix`, `key-marker`, `upload-id-marker` and `max-uploads`. `delimiter` is ignored.
 - ListParts supports `part-number-marker` and `max-parts`.
+- ListObjects (version 1) supports `prefix`, `delimiter`, `marker` and `max-keys`, and returns `NextMarker` for truncated pages listed with a delimiter.
 - GetObject and HeadObject support the conditional headers `If-Match`, `If-None-Match`, `If-Modified-Since` and `If-Unmodified-Since`, answering `304 Not Modified` or `412 Precondition Failed` as S3 does. A 304 response does not read the object data, so a cache such as Varnish can revalidate objects cheaply. Conditional writes are not supported.
 
 ## Health check endpoints

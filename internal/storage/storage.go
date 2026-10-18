@@ -14,6 +14,10 @@ type ListObjectsOptions struct {
 	MaxKeys           int
 	StartAfter        string
 	ContinuationToken string
+	// Marker is the marker of ListObjects version 1: the listing starts
+	// after it, and with a delimiter, after every key under it if it is a
+	// common prefix
+	Marker string
 }
 
 // ListObjectsResult contains the result of listing objects
@@ -22,6 +26,9 @@ type ListObjectsResult struct {
 	CommonPrefixes        []string
 	IsTruncated           bool
 	NextContinuationToken string
+	// NextMarker is the last key or common prefix of a truncated page, the
+	// marker for the next page of ListObjects version 1
+	NextMarker string
 }
 
 // Storage defines the interface for object storage operations

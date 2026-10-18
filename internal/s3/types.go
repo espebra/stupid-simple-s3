@@ -120,6 +120,21 @@ type ListBucketResult struct {
 	CommonPrefixes []Prefix `xml:"CommonPrefixes,omitempty"`
 }
 
+// ListBucketResultV1 is the response for ListObjects (version 1)
+type ListBucketResultV1 struct {
+	XMLName        xml.Name `xml:"ListBucketResult"`
+	Xmlns          string   `xml:"xmlns,attr"`
+	Name           string   `xml:"Name"`
+	Prefix         string   `xml:"Prefix"`
+	Marker         string   `xml:"Marker"`
+	NextMarker     string   `xml:"NextMarker,omitempty"`
+	MaxKeys        int      `xml:"MaxKeys"`
+	Delimiter      string   `xml:"Delimiter,omitempty"`
+	IsTruncated    bool     `xml:"IsTruncated"`
+	Contents       []Object `xml:"Contents"`
+	CommonPrefixes []Prefix `xml:"CommonPrefixes,omitempty"`
+}
+
 // ListBucketResultV2 is the response for ListObjectsV2
 type ListBucketResultV2 struct {
 	XMLName               xml.Name `xml:"ListBucketResult"`
