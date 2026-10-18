@@ -2522,3 +2522,34 @@ func TestMetricsBytesReceivedBehindAccessLog(t *testing.T) {
 		t.Errorf("BytesReceived grew by %v, want 1000", got)
 	}
 }
+
+func TestRouting(t *testing.T) {
+	_, store, cleanup := setupTestHandlers(t)
+	defer cleanup()
+	handler := NewServer(&config.Config{}, store).Handler()
+
+	for _, tc := range []struct {
+		method, path string
+		wantStatus   int
+	}{
+		// Unauthenticated requests that reach a route are denied
+		{"GET", "/test-bucket", http.StatusForbidden},
+		{"GET", "/test-bucket/", http.StatusForbidden},
+		{"GET", "/test-bucket/a//b", http.StatusForbidden},
+		{"PUT", "/test-bucket/a/./b", http.StatusForbidden},
+		{"GET", "/", http.StatusNotFound},
+		{"GET", "//key", http.StatusNotFound},
+		{"PATCH", "/test-bucket/key", http.StatusMethodNotAllowed},
+		{"OPTIONS", "/test-bucket", http.StatusMethodNotAllowed},
+		{"GET", "/healthz", http.StatusOK},
+	} {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(tc.method, tc.path, nil))
+		if w.Code != tc.wantStatus {
+			t.Errorf("%s %s: status = %d, want %d", tc.method, tc.path, w.Code, tc.wantStatus)
+		}
+		if tc.wantStatus == http.StatusMethodNotAllowed && w.Header().Get("Allow") != allowedMethods {
+			t.Errorf("%s %s: Allow = %q, want %q", tc.method, tc.path, w.Header().Get("Allow"), allowedMethods)
+		}
+	}
+}

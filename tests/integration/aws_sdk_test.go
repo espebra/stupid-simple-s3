@@ -1432,3 +1432,51 @@ func TestAWSSDK_CopyObjectMetadataDirective(t *testing.T) {
 		}
 	})
 }
+
+// TestAWSSDK_KeysWithDotSegmentsAndRepeatedSlashes tests that keys with
+// repeated slashes or "." segments are stored and read under exactly that
+// key. They must not be cleaned or redirected: in S3, "a//b" and "a/b"
+// are different objects.
+func TestAWSSDK_KeysWithDotSegmentsAndRepeatedSlashes(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	ctx := context.Background()
+	client := ts.AWSClient(ctx)
+
+	keys := []string{"odd/a/b", "odd/a//b", "odd/a/./b", "odd/./a", "odd/a/.", "odd//"}
+	for _, key := range keys {
+		_, err := client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket: aws.String(TestBucket),
+			Key:    aws.String(key),
+			Body:   bytes.NewReader([]byte(key)),
+		})
+		if err != nil {
+			t.Fatalf("PutObject %q failed: %v", key, err)
+		}
+	}
+	for _, key := range keys {
+		out, err := client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(TestBucket), Key: aws.String(key)})
+		if err != nil {
+			t.Fatalf("GetObject %q failed: %v", key, err)
+		}
+		body, _ := io.ReadAll(out.Body)
+		_ = out.Body.Close()
+		if string(body) != key {
+			t.Errorf("GetObject %q returned the data of %q", key, body)
+		}
+	}
+
+	list, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: aws.String(TestBucket), Prefix: aws.String("odd/")})
+	if err != nil {
+		t.Fatalf("ListObjectsV2 failed: %v", err)
+	}
+	var listed []string
+	for _, obj := range list.Contents {
+		listed = append(listed, aws.ToString(obj.Key))
+	}
+	want := slices.Sorted(slices.Values(keys))
+	if !slices.Equal(listed, want) {
+		t.Errorf("listed %q, want %q", listed, want)
+	}
+}
