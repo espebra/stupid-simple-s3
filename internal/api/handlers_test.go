@@ -1528,6 +1528,13 @@ func TestGetObjectRange(t *testing.T) {
 		if w.Code != http.StatusRequestedRangeNotSatisfiable {
 			t.Errorf("status = %d, want %d", w.Code, http.StatusRequestedRangeNotSatisfiable)
 		}
+		// S3 clients read the error code from the body
+		if !strings.Contains(w.Body.String(), "<Code>InvalidRange</Code>") {
+			t.Errorf("body = %q, want an InvalidRange error", w.Body.String())
+		}
+		if got, want := w.Header().Get("Content-Range"), fmt.Sprintf("bytes */%d", len(content)); got != want {
+			t.Errorf("Content-Range = %q, want %q", got, want)
+		}
 	})
 }
 

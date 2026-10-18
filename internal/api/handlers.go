@@ -629,7 +629,7 @@ func (h *Handlers) GetObjectRange(w http.ResponseWriter, r *http.Request) {
 	// Validate range
 	if start > end || start >= meta.Size {
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", meta.Size))
-		w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+		s3.WriteErrorResponse(w, s3.ErrInvalidRange)
 		return
 	}
 
