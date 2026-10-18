@@ -155,6 +155,9 @@ func ValidateBucketName(name string) error {
 // FilesystemStorage implements Storage using the local filesystem
 type FilesystemStorage struct {
 	basePath string
+	// cleanBase is basePath cleaned, as it appears at the start of the
+	// paths built from it with filepath.Join
+	cleanBase string
 	// realBase is basePath made absolute with symlinks resolved, at startup
 	realBase      string
 	multipartPath string
@@ -230,6 +233,7 @@ func NewFilesystemStorage(basePath, multipartPath string) (*FilesystemStorage, e
 
 	return &FilesystemStorage{
 		basePath:      basePath,
+		cleanBase:     filepath.Clean(basePath),
 		realBase:      realBase,
 		multipartPath: multipartPath,
 		minPartSize:   MinPartSize,
@@ -351,7 +355,12 @@ func (fs *FilesystemStorage) prepareObjectDir(objPath string) error {
 
 	// Defense in depth: verify the created directory is within the base
 	// path after resolving symlinks, so that a symlink planted in the
-	// storage tree cannot make a write land outside it
+	// storage tree cannot make a write land outside it. The base path was
+	// resolved at startup, so without symlinks below it, the object
+	// directory is inside it. Only resolve the whole path if there is one.
+	if !fs.hasSymlinkBelowBase(objPath) {
+		return nil
+	}
 	realObjPath, err := filepath.EvalSymlinks(objPath)
 	if err != nil {
 		return fmt.Errorf("resolving object path: %w", err)
@@ -361,6 +370,30 @@ func (fs *FilesystemStorage) prepareObjectDir(objPath string) error {
 		return fmt.Errorf("%w: path escapes base directory via symlink", ErrInvalidKey)
 	}
 	return nil
+}
+
+// maxDirsBelowBase is the number of directories from the base path down to
+// an object directory: buckets/<bucket>/objects/<shard>/<object>
+const maxDirsBelowBase = 5
+
+// hasSymlinkBelowBase reports whether any directory between the base path
+// and objPath, including objPath, is a symlink. It lstats only those
+// directories, where filepath.EvalSymlinks lstats every component of the
+// path from the root. It returns true when it cannot tell, so that the
+// caller resolves the path in full.
+func (fs *FilesystemStorage) hasSymlinkBelowBase(objPath string) bool {
+	dir := objPath
+	for range maxDirsBelowBase {
+		info, err := os.Lstat(dir)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return true
+		}
+		dir = filepath.Dir(dir)
+		if dir == fs.cleanBase {
+			return false
+		}
+	}
+	return true
 }
 
 // createObjectDir creates an object directory and its shard directory inside

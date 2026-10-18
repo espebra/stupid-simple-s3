@@ -220,25 +220,79 @@ func TestUploadInProgressBlocksDeleteBucket(t *testing.T) {
 }
 
 // TestWriteThroughPlantedSymlinkRejected tests that a symlink planted in the
-// storage tree cannot make a write land outside the base path
+// storage tree cannot make a write land outside the base path, at any level
+// below it
 func TestWriteThroughPlantedSymlinkRejected(t *testing.T) {
+	for name, levels := range map[string]int{
+		"object directory":  0,
+		"shard directory":   1,
+		"objects directory": 2,
+	} {
+		t.Run(name, func(t *testing.T) {
+			storage, cleanup := setupTestStorage(t)
+			defer cleanup()
+
+			objPath, err := storage.keyToPath(testBucket, "redirected")
+			if err != nil {
+				t.Fatalf("keyToPath failed: %v", err)
+			}
+			planted := objPath
+			for range levels {
+				planted = filepath.Dir(planted)
+			}
+			// The symlink replaces an existing directory, and points to an
+			// empty one outside the base path
+			_ = os.RemoveAll(planted)
+			if err := os.MkdirAll(filepath.Dir(planted), 0700); err != nil {
+				t.Fatalf("creating parent of symlink: %v", err)
+			}
+			outside := t.TempDir()
+			if err := os.Symlink(outside, planted); err != nil {
+				t.Fatalf("planting symlink: %v", err)
+			}
+			// The shard directory must exist below an objects directory
+			// symlink for the write to get as far as the check
+			if levels == 2 {
+				_ = os.Mkdir(filepath.Join(outside, filepath.Base(filepath.Dir(objPath))), 0700)
+			}
+
+			_, err = storage.PutObject(testBucket, "redirected", "text/plain", nil, bytes.NewReader([]byte("data")))
+			if !errors.Is(err, ErrInvalidKey) {
+				t.Errorf("PutObject through a planted symlink: err = %v, want ErrInvalidKey", err)
+			}
+			_ = filepath.WalkDir(outside, func(path string, d os.DirEntry, err error) error {
+				if err == nil && !d.IsDir() {
+					t.Errorf("write left %s outside the base path", path)
+				}
+				return nil
+			})
+		})
+	}
+}
+
+// TestWriteThroughSymlinkInsideBase tests that a symlink in the storage tree
+// that resolves to a directory inside the base path is followed
+func TestWriteThroughSymlinkInsideBase(t *testing.T) {
 	storage, cleanup := setupTestStorage(t)
 	defer cleanup()
 
-	objPath, err := storage.keyToPath(testBucket, "redirected")
+	objPath, err := storage.keyToPath(testBucket, "moved")
 	if err != nil {
 		t.Fatalf("keyToPath failed: %v", err)
 	}
-	outside := t.TempDir()
-	if err := os.Symlink(outside, filepath.Dir(objPath)); err != nil {
+	shard := filepath.Dir(objPath)
+	target := filepath.Join(storage.basePath, "moved-shard")
+	if err := os.Mkdir(target, 0700); err != nil {
+		t.Fatalf("creating target: %v", err)
+	}
+	if err := os.Symlink(target, shard); err != nil {
 		t.Fatalf("planting symlink: %v", err)
 	}
 
-	_, err = storage.PutObject(testBucket, "redirected", "text/plain", nil, bytes.NewReader([]byte("data")))
-	if !errors.Is(err, ErrInvalidKey) {
-		t.Errorf("PutObject through a planted symlink: err = %v, want ErrInvalidKey", err)
+	if _, err := storage.PutObject(testBucket, "moved", "text/plain", nil, bytes.NewReader([]byte("data"))); err != nil {
+		t.Fatalf("PutObject through a symlink inside the base path: %v", err)
 	}
-	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
-		t.Errorf("write left %d entries outside the base path", len(entries))
+	if _, err := os.Stat(filepath.Join(target, filepath.Base(objPath), "data")); err != nil {
+		t.Errorf("object not written through the symlink: %v", err)
 	}
 }
