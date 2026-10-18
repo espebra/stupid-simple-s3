@@ -1643,3 +1643,34 @@ func TestCleanupStaleUploads(t *testing.T) {
 		}
 	})
 }
+
+// TestDeleteObjectRemovesLeftoverFiles tests that deleting an object also
+// removes files other than data and meta.json from its directory, such as
+// temp files left there by earlier versions
+func TestDeleteObjectRemovesLeftoverFiles(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	if _, err := storage.PutObject(testBucket, "obj", "text/plain", nil, bytes.NewReader([]byte("data"))); err != nil {
+		t.Fatalf("PutObject failed: %v", err)
+	}
+	objPath, err := storage.keyToPath(testBucket, "obj")
+	if err != nil {
+		t.Fatalf("keyToPath failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(objPath, "data.tmp.leftover"), []byte("x"), 0600); err != nil {
+		t.Fatalf("writing leftover file: %v", err)
+	}
+
+	if err := storage.DeleteObject(testBucket, "obj"); err != nil {
+		t.Fatalf("DeleteObject failed: %v", err)
+	}
+	if _, err := os.Stat(objPath); !os.IsNotExist(err) {
+		t.Errorf("object directory still exists: %v", err)
+	}
+
+	// Deleting a key that does not exist succeeds, as in S3
+	if err := storage.DeleteObject(testBucket, "missing"); err != nil {
+		t.Errorf("DeleteObject of a missing key: %v", err)
+	}
+}

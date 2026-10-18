@@ -700,7 +700,7 @@ func (fs *FilesystemStorage) DeleteObject(bucket, key string) error {
 	// from landing between the data and metadata renames of a write.
 	commit := fs.commitLock(objPath)
 	commit.Lock()
-	err = os.RemoveAll(objPath)
+	err = removeObjectDir(objPath)
 	if err == nil {
 		if idx := fs.existingIndex(bucket); idx != nil {
 			idx.remove(key)
@@ -713,9 +713,26 @@ func (fs *FilesystemStorage) DeleteObject(bucket, key string) error {
 
 	// Try to remove empty parent directory (ignore errors)
 	parentDir := filepath.Dir(objPath)
-	_ = os.Remove(parentDir) // only succeeds if empty
+	_ = syscall.Rmdir(parentDir) // only succeeds if empty
 
 	return nil
+}
+
+// removeObjectDir removes an object directory. An object directory holds
+// only meta.json and data, so it removes those and then the directory: three
+// system calls, where os.RemoveAll first tries to remove the directory as a
+// file and as a directory, and then opens it and reads its entries.
+// meta.json goes first, so the object stops being found before its data
+// is gone. A directory that is gone already counts as removed, and one that
+// still holds anything else is left to os.RemoveAll.
+func removeObjectDir(objPath string) error {
+	_ = syscall.Unlink(filepath.Join(objPath, "meta.json"))
+	_ = syscall.Unlink(filepath.Join(objPath, "data"))
+	err := syscall.Rmdir(objPath)
+	if err == nil || errors.Is(err, syscall.ENOENT) {
+		return nil
+	}
+	return os.RemoveAll(objPath)
 }
 
 // ObjectExists checks if an object exists
