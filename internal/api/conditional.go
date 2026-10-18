@@ -22,7 +22,7 @@ func checkPreconditions(r *http.Request, meta *s3.ObjectMetadata) int {
 		if !etagListMatches(ifMatch, meta.ETag, true) {
 			return http.StatusPreconditionFailed
 		}
-	} else if t, err := http.ParseTime(r.Header.Get("If-Unmodified-Since")); err == nil {
+	} else if t, ok := parseHTTPDate(r.Header.Get("If-Unmodified-Since")); ok {
 		if lastModified.After(t) {
 			return http.StatusPreconditionFailed
 		}
@@ -32,13 +32,25 @@ func checkPreconditions(r *http.Request, meta *s3.ObjectMetadata) int {
 		if etagListMatches(ifNoneMatch, meta.ETag, false) {
 			return http.StatusNotModified
 		}
-	} else if t, err := http.ParseTime(r.Header.Get("If-Modified-Since")); err == nil {
+	} else if t, ok := parseHTTPDate(r.Header.Get("If-Modified-Since")); ok {
 		if !lastModified.After(t) {
 			return http.StatusNotModified
 		}
 	}
 
 	return 0
+}
+
+// parseHTTPDate parses an HTTP date header value. Most requests send no
+// date conditions, and http.ParseTime of an empty value tries three
+// layouts and allocates an error for each, so it is only called when there
+// is a value.
+func parseHTTPDate(value string) (time.Time, bool) {
+	if value == "" {
+		return time.Time{}, false
+	}
+	t, err := http.ParseTime(value)
+	return t, err == nil
 }
 
 // etagListMatches reports whether a comma-separated If-Match or
