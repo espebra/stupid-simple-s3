@@ -99,7 +99,7 @@ github.com/cespare/xxhash/v2
 # github.com/dustin/go-humanize v1.1.0
 ## explicit; go 1.21
 github.com/dustin/go-humanize
-# github.com/espebra/btree v0.0.0-20261017233452-6104c4c3146c
+# github.com/espebra/btree v0.0.0-20261017233738-9bf9ea211276
 ## explicit; go 1.27
 github.com/espebra/btree
 # github.com/google/uuid v1.6.0

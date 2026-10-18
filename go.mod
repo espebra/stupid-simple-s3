@@ -7,7 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.9
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.3
 	github.com/aws/smithy-go v1.28.5
-	github.com/espebra/btree v0.0.0-20261017233452-6104c4c3146c
+	github.com/espebra/btree v0.0.0-20261017233738-9bf9ea211276
 	github.com/google/uuid v1.6.0
 	github.com/minio/minio-go/v7 v7.3.0
 	github.com/prometheus/client_golang v1.25.0
