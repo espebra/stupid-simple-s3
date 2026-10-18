@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -645,20 +644,13 @@ func (fs *FilesystemStorage) HeadObject(bucket, key string) (*s3.ObjectMetadata,
 
 // readObjectMetadata reads an object's meta.json
 func readObjectMetadata(metaPath string) (*s3.ObjectMetadata, error) {
-	metaFile, err := os.Open(metaPath)
-	if err != nil {
-		if os.IsNotExist(err) {
+	var meta s3.ObjectMetadata
+	if err := readJSONFile(metaPath, &meta); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrObjectNotFound
 		}
-		return nil, fmt.Errorf("opening metadata file: %w", err)
+		return nil, fmt.Errorf("reading metadata: %w", err)
 	}
-	defer func() { _ = metaFile.Close() }()
-
-	var meta s3.ObjectMetadata
-	if err := json.NewDecoder(metaFile).Decode(&meta); err != nil {
-		return nil, fmt.Errorf("parsing metadata: %w", err)
-	}
-
 	return &meta, nil
 }
 

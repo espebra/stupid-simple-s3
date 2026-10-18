@@ -1674,3 +1674,34 @@ func TestDeleteObjectRemovesLeftoverFiles(t *testing.T) {
 		t.Errorf("DeleteObject of a missing key: %v", err)
 	}
 }
+
+// TestReadJSONFile tests reading metadata files that fit in the read buffer
+// and ones that do not
+func TestReadJSONFile(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range []int{0, 10, metaBufferSize, 3 * metaBufferSize} {
+		want := s3.ObjectMetadata{Key: "key", Size: 42, UserMetadata: map[string]string{"pad": strings.Repeat("x", n)}}
+		path := filepath.Join(dir, fmt.Sprintf("meta-%d.json", n))
+		if err := writeJSONFile(path, &want); err != nil {
+			t.Fatalf("writeJSONFile: %v", err)
+		}
+		var got s3.ObjectMetadata
+		if err := readJSONFile(path, &got); err != nil {
+			t.Fatalf("readJSONFile with %d bytes of metadata: %v", n, err)
+		}
+		if got.Key != want.Key || got.Size != want.Size || got.UserMetadata["pad"] != want.UserMetadata["pad"] {
+			t.Errorf("readJSONFile with %d bytes of metadata: got %+v", n, got)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "bad.json"), []byte(`{"key": "trunc`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var meta s3.ObjectMetadata
+	if err := readJSONFile(filepath.Join(dir, "bad.json"), &meta); err == nil {
+		t.Error("readJSONFile of truncated JSON: no error")
+	}
+	if err := readJSONFile(filepath.Join(dir, "missing.json"), &meta); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("readJSONFile of missing file: err = %v, want os.ErrNotExist", err)
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -206,17 +207,13 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 		partPath := filepath.Join(uploadPath, partFilename)
 		partMetaPath := filepath.Join(uploadPath, partFilename+".meta")
 
-		partMetaFile, err := os.Open(partMetaPath)
-		if err != nil {
-			return nil, fmt.Errorf("part %d: %w", part.PartNumber, ErrPartNotFound)
-		}
-
 		var partMeta s3.PartMetadata
-		if err := json.NewDecoder(partMetaFile).Decode(&partMeta); err != nil {
-			_ = partMetaFile.Close()
+		if err := readJSONFile(partMetaPath, &partMeta); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, fmt.Errorf("part %d: %w", part.PartNumber, ErrPartNotFound)
+			}
 			return nil, fmt.Errorf("reading part %d metadata: %w", part.PartNumber, err)
 		}
-		_ = partMetaFile.Close()
 
 		// Verify actual part file size matches metadata
 		partInfo, err := os.Stat(partPath)
@@ -378,18 +375,12 @@ func (fs *FilesystemStorage) getMultipartUploadInternal(uploadID string) (*s3.Mu
 	uploadPath := fs.uploadDir(uploadID)
 	metaPath := filepath.Join(uploadPath, "meta.json")
 
-	metaFile, err := os.Open(metaPath)
-	if err != nil {
-		if os.IsNotExist(err) {
+	var meta s3.MultipartUploadMetadata
+	if err := readJSONFile(metaPath, &meta); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrUploadNotFound
 		}
-		return nil, fmt.Errorf("opening upload metadata: %w", err)
-	}
-	defer func() { _ = metaFile.Close() }()
-
-	var meta s3.MultipartUploadMetadata
-	if err := json.NewDecoder(metaFile).Decode(&meta); err != nil {
-		return nil, fmt.Errorf("parsing upload metadata: %w", err)
+		return nil, fmt.Errorf("reading upload metadata: %w", err)
 	}
 
 	return &meta, nil
@@ -432,18 +423,10 @@ func (fs *FilesystemStorage) ListParts(uploadID string) ([]s3.PartMetadata, erro
 			continue
 		}
 
-		metaPath := filepath.Join(uploadPath, name)
-		metaFile, err := os.Open(metaPath)
-		if err != nil {
-			continue
-		}
-
 		var partMeta s3.PartMetadata
-		if err := json.NewDecoder(metaFile).Decode(&partMeta); err != nil {
-			_ = metaFile.Close()
+		if err := readJSONFile(filepath.Join(uploadPath, name), &partMeta); err != nil {
 			continue
 		}
-		_ = metaFile.Close()
 
 		partMeta.PartNumber = partNum
 		if info, err := os.Stat(filepath.Join(uploadPath, strings.TrimSuffix(name, ".meta"))); err == nil {
@@ -654,6 +637,53 @@ func partDigest(partMeta *s3.PartMetadata, partPath string) ([]byte, error) {
 		return nil, err
 	}
 	return hash.Sum(nil), nil
+}
+
+// metaBufferSize is the size of the buffers in metaBufferPool. Metadata
+// files are a few hundred bytes, more with user metadata.
+const metaBufferSize = 4096
+
+// metaBufferPool holds the buffers that readJSONFile reads files into
+var metaBufferPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, metaBufferSize)
+		return &buf
+	},
+}
+
+// readJSONFile decodes the JSON file at path into v. Metadata files are
+// small, so it reads the file with one read into a pooled buffer, where
+// json.NewDecoder allocates a decoder and a read buffer that it grows as it
+// goes. A file that does not fit in the buffer is read to the end. v must
+// not keep references to the data it is decoded from; json.Unmarshal copies
+// strings, so structs of strings, numbers, times and maps are fine. A
+// missing file gives an error that matches os.ErrNotExist.
+func readJSONFile(path string, v any) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	bufp := metaBufferPool.Get().(*[]byte)
+	defer metaBufferPool.Put(bufp)
+	buf := *bufp
+
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return err
+	}
+	// A short read of a regular file normally ends at the end of the file.
+	// A JSON object is only valid up to its closing brace, so if it parses,
+	// nothing but trailing whitespace can be missing.
+	if n < len(buf) && json.Unmarshal(buf[:n], v) == nil {
+		return nil
+	}
+	rest, err := io.ReadAll(f)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(append(buf[:n:n], rest...), v)
 }
 
 // writeJSONFile writes v as JSON to a new file at path
