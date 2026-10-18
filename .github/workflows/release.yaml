@@ -141,6 +141,8 @@ jobs:
             COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          sbom: true
+          provenance: mode=max
 
   release:
     runs-on: ubuntu-latest
@@ -164,11 +166,17 @@ jobs:
       - name: List downloaded artifacts
         run: ls -lR artifacts/
 
+      - uses: anchore/sbom-action/download-syft@v0
+        id: syft
+
       - name: Prepare release files
         run: |
           mkdir -p release
           cp artifacts/binaries/stupid-simple-s3-* release/
           cp artifacts/package-*/*.deb artifacts/package-*/*.rpm release/ 2>/dev/null || true
+          for f in release/stupid-simple-s3-*; do
+            ${{ steps.syft.outputs.cmd }} scan "file:$f" -o spdx-json="$f.spdx.json"
+          done
           cd release
           sha256sum * > checksums.txt
 
