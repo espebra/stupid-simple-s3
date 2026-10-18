@@ -2389,3 +2389,77 @@ func TestInvalidKeyIsClientError(t *testing.T) {
 		}
 	})
 }
+
+func TestMultipartUploadChecks(t *testing.T) {
+	handlers, store, cleanup := setupTestHandlers(t)
+	defer cleanup()
+	if err := store.CreateBucket("other-bucket"); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+
+	newUpload := func(t *testing.T, key string) string {
+		uploadID, err := store.CreateMultipartUpload("test-bucket", key, "text/plain", nil)
+		if err != nil {
+			t.Fatalf("CreateMultipartUpload: %v", err)
+		}
+		if _, err := store.UploadPart(uploadID, 1, strings.NewReader("part")); err != nil {
+			t.Fatalf("UploadPart: %v", err)
+		}
+		return uploadID
+	}
+	request := func(method, bucket, key, query, body string) *http.Request {
+		req := httptest.NewRequest(method, "/"+bucket+"/"+key+"?"+query, strings.NewReader(body))
+		req.SetPathValue("bucket", bucket)
+		req.SetPathValue("key", key)
+		return req
+	}
+
+	t.Run("complete with no parts", func(t *testing.T) {
+		uploadID := newUpload(t, "no-parts")
+		w := httptest.NewRecorder()
+		handlers.PostObject(w, request("POST", "test-bucket", "no-parts", "uploadId="+uploadID, "<CompleteMultipartUpload></CompleteMultipartUpload>"))
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "MalformedXML") {
+			t.Errorf("status = %d %s, want 400 MalformedXML", w.Code, w.Body.String())
+		}
+		if exists, _ := store.ObjectExists("test-bucket", "no-parts"); exists {
+			t.Error("completing with no parts created an object")
+		}
+		if _, err := store.GetMultipartUpload(uploadID); err != nil {
+			t.Errorf("upload is gone after a rejected completion: %v", err)
+		}
+	})
+
+	// An upload belongs to the bucket it was created in. Requests for it
+	// through another bucket do not find it, as in S3.
+	for _, tc := range []struct {
+		name    string
+		method  string
+		query   string
+		body    string
+		handler func(http.ResponseWriter, *http.Request)
+	}{
+		{"upload part", "PUT", "partNumber=2&uploadId=", "data", handlers.PutObject},
+		{"complete", "POST", "uploadId=", "", handlers.PostObject},
+		{"abort", "DELETE", "uploadId=", "", handlers.DeleteObject},
+	} {
+		t.Run(tc.name+" through another bucket", func(t *testing.T) {
+			uploadID := newUpload(t, "other")
+			body := tc.body
+			if tc.method == "POST" {
+				part, _ := store.ListParts(uploadID)
+				body = fmt.Sprintf("<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>%s</ETag></Part></CompleteMultipartUpload>", part[0].ETag)
+			}
+			w := httptest.NewRecorder()
+			tc.handler(w, request(tc.method, "other-bucket", "other", tc.query+uploadID, body))
+			if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "NoSuchUpload") {
+				t.Errorf("status = %d %s, want 404 NoSuchUpload", w.Code, w.Body.String())
+			}
+			if _, err := store.GetMultipartUpload(uploadID); err != nil {
+				t.Errorf("upload is gone: %v", err)
+			}
+			if exists, _ := store.ObjectExists("other-bucket", "other"); exists {
+				t.Error("object created in the other bucket")
+			}
+		})
+	}
+}

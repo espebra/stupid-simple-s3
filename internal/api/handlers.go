@@ -918,8 +918,9 @@ func (h *Handlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify upload exists and key matches
+	// An upload belongs to the bucket it was created in
 	uploadMeta, err := h.storage.GetMultipartUpload(uploadID)
-	if err != nil {
+	if err != nil || uploadMeta.Bucket != bucket {
 		s3.WriteErrorResponse(w, s3.ErrNoSuchUpload)
 		return
 	}
@@ -998,8 +999,9 @@ func (h *Handlers) CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Verify upload exists and key matches
+	// An upload belongs to the bucket it was created in
 	uploadMeta, err := h.storage.GetMultipartUpload(uploadID)
-	if err != nil {
+	if err != nil || uploadMeta.Bucket != bucket {
 		s3.WriteErrorResponse(w, s3.ErrNoSuchUpload)
 		return
 	}
@@ -1015,6 +1017,11 @@ func (h *Handlers) CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 	var completeReq s3.CompleteMultipartUpload
 	if err := readXMLBody(r, maxXMLBodySize, &completeReq); err != nil {
 		writeXMLBodyError(w, err)
+		return
+	}
+	// S3 requires at least one part, and answers MalformedXML without
+	if len(completeReq.Parts) == 0 {
+		s3.WriteErrorResponse(w, s3.ErrMalformedXML)
 		return
 	}
 
@@ -1083,8 +1090,9 @@ func (h *Handlers) AbortMultipartUpload(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Verify upload exists
+	// An upload belongs to the bucket it was created in
 	uploadMeta, err := h.storage.GetMultipartUpload(uploadID)
-	if err != nil {
+	if err != nil || uploadMeta.Bucket != bucket {
 		s3.WriteErrorResponse(w, s3.ErrNoSuchUpload)
 		return
 	}
