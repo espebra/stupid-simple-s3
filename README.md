@@ -248,6 +248,7 @@ Notes:
 - As in S3, every part of a multipart upload except the last must be at least 5 MiB. CompleteMultipartUpload fails with `EntityTooSmall` otherwise.
 - ListMultipartUploads supports `prefix`, `key-marker`, `upload-id-marker` and `max-uploads`. `delimiter` is ignored.
 - ListParts supports `part-number-marker` and `max-parts`.
+- CopyObject supports `x-amz-metadata-directive`: `COPY` (the default) keeps the source's content type and user metadata, `REPLACE` takes them from the request. Other `x-amz-copy-source-*` conditions are not supported.
 - ListObjects (version 1) supports `prefix`, `delimiter`, `marker` and `max-keys`, and returns `NextMarker` for truncated pages listed with a delimiter.
 - GetObject and HeadObject support the conditional headers `If-Match`, `If-None-Match`, `If-Modified-Since` and `If-Unmodified-Since`, answering `304 Not Modified` or `412 Precondition Failed` as S3 does. A 304 response does not read the object data, so a cache such as Varnish can revalidate objects cheaply. Conditional writes are not supported.
 

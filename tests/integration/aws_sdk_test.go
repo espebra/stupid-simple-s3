@@ -1357,3 +1357,78 @@ func TestAWSSDK_HeaderWhitespace(t *testing.T) {
 		t.Errorf("metadata = %q, want it stored as sent", got)
 	}
 }
+
+// TestAWSSDK_CopyObjectMetadataDirective tests that CopyObject keeps the
+// source's content type and metadata by default, and replaces them with
+// the request's when the metadata directive is REPLACE
+func TestAWSSDK_CopyObjectMetadataDirective(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	ctx := context.Background()
+	client := ts.AWSClient(ctx)
+
+	_, err := client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(TestBucket),
+		Key:         aws.String("src"),
+		Body:        bytes.NewReader([]byte("<p>hi</p>")),
+		ContentType: aws.String("text/plain"),
+		Metadata:    map[string]string{"old": "1"},
+	})
+	if err != nil {
+		t.Fatalf("PutObject failed: %v", err)
+	}
+
+	head := func(key string) *s3.HeadObjectOutput {
+		out, err := client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(TestBucket), Key: aws.String(key)})
+		if err != nil {
+			t.Fatalf("HeadObject %s failed: %v", key, err)
+		}
+		return out
+	}
+
+	t.Run("copy", func(t *testing.T) {
+		_, err := client.CopyObject(ctx, &s3.CopyObjectInput{
+			Bucket:     aws.String(TestBucket),
+			Key:        aws.String("copied"),
+			CopySource: aws.String(TestBucket + "/src"),
+		})
+		if err != nil {
+			t.Fatalf("CopyObject failed: %v", err)
+		}
+		out := head("copied")
+		if aws.ToString(out.ContentType) != "text/plain" || !maps.Equal(out.Metadata, map[string]string{"old": "1"}) {
+			t.Errorf("copy has %q %v, want the source's", aws.ToString(out.ContentType), out.Metadata)
+		}
+	})
+
+	t.Run("replace in place", func(t *testing.T) {
+		_, err := client.CopyObject(ctx, &s3.CopyObjectInput{
+			Bucket:            aws.String(TestBucket),
+			Key:               aws.String("src"),
+			CopySource:        aws.String(TestBucket + "/src"),
+			MetadataDirective: types.MetadataDirectiveReplace,
+			ContentType:       aws.String("text/html"),
+			Metadata:          map[string]string{"new": "2"},
+		})
+		if err != nil {
+			t.Fatalf("CopyObject failed: %v", err)
+		}
+		out := head("src")
+		if aws.ToString(out.ContentType) != "text/html" || !maps.Equal(out.Metadata, map[string]string{"new": "2"}) {
+			t.Errorf("object has %q %v, want text/html map[new:2]", aws.ToString(out.ContentType), out.Metadata)
+		}
+	})
+
+	t.Run("invalid directive", func(t *testing.T) {
+		_, err := client.CopyObject(ctx, &s3.CopyObjectInput{
+			Bucket:            aws.String(TestBucket),
+			Key:               aws.String("invalid"),
+			CopySource:        aws.String(TestBucket + "/src"),
+			MetadataDirective: "MERGE",
+		})
+		if err == nil || !strings.Contains(err.Error(), "InvalidArgument") {
+			t.Errorf("CopyObject with directive MERGE: err = %v, want InvalidArgument", err)
+		}
+	})
+}

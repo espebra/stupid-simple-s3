@@ -7,6 +7,12 @@ import (
 	"github.com/espen/stupid-simple-s3/internal/s3"
 )
 
+// ObjectAttributes are the attributes of an object that a client sets
+type ObjectAttributes struct {
+	ContentType  string
+	UserMetadata map[string]string
+}
+
 // ListObjectsOptions contains options for listing objects
 type ListObjectsOptions struct {
 	Prefix            string
@@ -55,8 +61,10 @@ type Storage interface {
 	// ListObjects lists objects with optional prefix, delimiter, and pagination
 	ListObjects(bucket string, opts ListObjectsOptions) (*ListObjectsResult, error)
 
-	// CopyObject copies an object from source key to destination key
-	CopyObject(srcBucket, srcKey, dstBucket, dstKey string) (*s3.ObjectMetadata, error)
+	// CopyObject copies an object from source key to destination key. The
+	// copy gets the content type and user metadata of the source, or those
+	// in replace if it is not nil.
+	CopyObject(srcBucket, srcKey, dstBucket, dstKey string, replace *ObjectAttributes) (*s3.ObjectMetadata, error)
 }
 
 // BucketStorage defines the interface for bucket operations

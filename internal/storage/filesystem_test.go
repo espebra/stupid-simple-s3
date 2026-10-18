@@ -1251,7 +1251,7 @@ func TestCopyObject(t *testing.T) {
 	}
 
 	// Copy object
-	dstMeta, err := storage.CopyObject(testBucket, srcKey, testBucket, dstKey)
+	dstMeta, err := storage.CopyObject(testBucket, srcKey, testBucket, dstKey, nil)
 	if err != nil {
 		t.Fatalf("CopyObject failed: %v", err)
 	}
@@ -1287,7 +1287,7 @@ func TestCopyObjectNotFound(t *testing.T) {
 	storage, cleanup := setupTestStorage(t)
 	defer cleanup()
 
-	_, err := storage.CopyObject(testBucket, "nonexistent", testBucket, "destination")
+	_, err := storage.CopyObject(testBucket, "nonexistent", testBucket, "destination", nil)
 	if err == nil {
 		t.Error("expected error when copying nonexistent object")
 	}
@@ -1509,7 +1509,7 @@ func TestPathTraversalPrevention(t *testing.T) {
 		})
 
 		t.Run("CopyObject_src_"+key, func(t *testing.T) {
-			_, err := storage.CopyObject(testBucket, key, testBucket, "valid-dest.txt")
+			_, err := storage.CopyObject(testBucket, key, testBucket, "valid-dest.txt", nil)
 			if err == nil {
 				t.Fatalf("CopyObject(%q, dst) should have failed with path traversal error", key)
 			}

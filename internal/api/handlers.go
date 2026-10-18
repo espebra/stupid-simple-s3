@@ -383,8 +383,29 @@ func (h *Handlers) CopyObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The copy keeps the source's content type and user metadata, unless
+	// the request replaces them with its own
+	var replace *storage.ObjectAttributes
+	switch r.Header.Get("X-Amz-Metadata-Directive") {
+	case "", "COPY":
+	case "REPLACE":
+		userMetadata, err := extractAndValidateMetadata(r.Header)
+		if err != nil {
+			s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
+			return
+		}
+		contentType := r.Header.Get("Content-Type")
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		replace = &storage.ObjectAttributes{ContentType: contentType, UserMetadata: userMetadata}
+	default:
+		s3.WriteErrorResponse(w, s3.ErrInvalidArgument)
+		return
+	}
+
 	// Copy the object
-	meta, err := h.storage.CopyObject(srcBucket, srcKey, dstBucket, dstKey)
+	meta, err := h.storage.CopyObject(srcBucket, srcKey, dstBucket, dstKey, replace)
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectNotFound) {
 			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)

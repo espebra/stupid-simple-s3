@@ -932,7 +932,7 @@ func (fs *FilesystemStorage) ListObjects(bucket string, opts ListObjectsOptions)
 }
 
 // CopyObject copies an object from source key to destination key
-func (fs *FilesystemStorage) CopyObject(srcBucket, srcKey, dstBucket, dstKey string) (*s3.ObjectMetadata, error) {
+func (fs *FilesystemStorage) CopyObject(srcBucket, srcKey, dstBucket, dstKey string, replace *ObjectAttributes) (*s3.ObjectMetadata, error) {
 	// Get source object
 	srcReader, srcMeta, err := fs.GetObject(srcBucket, srcKey)
 	if err != nil {
@@ -940,8 +940,13 @@ func (fs *FilesystemStorage) CopyObject(srcBucket, srcKey, dstBucket, dstKey str
 	}
 	defer func() { _ = srcReader.Close() }()
 
+	attrs := ObjectAttributes{ContentType: srcMeta.ContentType, UserMetadata: srcMeta.UserMetadata}
+	if replace != nil {
+		attrs = *replace
+	}
+
 	// Copy to destination
-	dstMeta, err := fs.PutObject(dstBucket, dstKey, srcMeta.ContentType, srcMeta.UserMetadata, srcReader)
+	dstMeta, err := fs.PutObject(dstBucket, dstKey, attrs.ContentType, attrs.UserMetadata, srcReader)
 	if err != nil {
 		return nil, fmt.Errorf("copying object: %w", err)
 	}

@@ -65,7 +65,7 @@ func TestIndexFollowsWrites(t *testing.T) {
 	if err := storage.DeleteObject(testBucket, "b"); err != nil {
 		t.Fatalf("DeleteObject failed: %v", err)
 	}
-	if _, err := storage.CopyObject(testBucket, "c", testBucket, "d"); err != nil {
+	if _, err := storage.CopyObject(testBucket, "c", testBucket, "d", nil); err != nil {
 		t.Fatalf("CopyObject failed: %v", err)
 	}
 	uploadID, err := storage.CreateMultipartUpload(testBucket, "e", "text/plain", nil)
