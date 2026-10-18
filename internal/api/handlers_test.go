@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
+
 	"github.com/espen/stupid-simple-s3/internal/config"
 	"github.com/espen/stupid-simple-s3/internal/metrics"
 	"github.com/espen/stupid-simple-s3/internal/s3"
@@ -2468,5 +2470,50 @@ func TestMultipartUploadChecks(t *testing.T) {
 				t.Error("object created in the other bucket")
 			}
 		})
+	}
+}
+
+func TestMetricsBytesReceived(t *testing.T) {
+	counter := func() float64 {
+		var m dto.Metric
+		if err := metrics.BytesReceived.WithLabelValues(metrics.OpPutObject).Write(&m); err != nil {
+			t.Fatalf("reading counter: %v", err)
+		}
+		return m.GetCounter().GetValue()
+	}
+	handler := MetricsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+	}))
+
+	// A body sent with chunked transfer encoding has no Content-Length
+	before := counter()
+	req := httptest.NewRequest("PUT", "/test-bucket/key", strings.NewReader(strings.Repeat("x", 1000)))
+	req.ContentLength = -1
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+	if got := counter() - before; got != 1000 {
+		t.Errorf("BytesReceived grew by %v, want 1000", got)
+	}
+}
+
+// TestMetricsBytesReceivedBehindAccessLog tests that the received bytes are
+// counted once when both middlewares count the body
+func TestMetricsBytesReceivedBehindAccessLog(t *testing.T) {
+	counter := func() float64 {
+		var m dto.Metric
+		if err := metrics.BytesReceived.WithLabelValues(metrics.OpPutObject).Write(&m); err != nil {
+			t.Fatalf("reading counter: %v", err)
+		}
+		return m.GetCounter().GetValue()
+	}
+	handler := AccessLogMiddleware(nil)(MetricsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+	})))
+
+	before := counter()
+	req := httptest.NewRequest("PUT", "/test-bucket/key", strings.NewReader(strings.Repeat("x", 1000)))
+	req.ContentLength = -1
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+	if got := counter() - before; got != 1000 {
+		t.Errorf("BytesReceived grew by %v, want 1000", got)
 	}
 }

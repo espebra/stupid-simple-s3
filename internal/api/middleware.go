@@ -179,6 +179,15 @@ func MetricsMiddleware(next http.Handler) http.Handler {
 
 		start := time.Now()
 		rw := newResponseWriter(w)
+		// Count the body as it is read. Content-Length is -1 for a body
+		// sent with chunked transfer encoding, and is only what the client
+		// declared. The access log middleware counts it already when it
+		// runs first, so use its count then.
+		body, counted := r.Body.(*countingReader)
+		if !counted && r.Body != nil && r.Body != http.NoBody {
+			body = &countingReader{ReadCloser: r.Body}
+			r.Body = body
+		}
 
 		next.ServeHTTP(rw, r)
 
@@ -193,8 +202,8 @@ func MetricsMiddleware(next http.Handler) http.Handler {
 			metrics.BytesSent.WithLabelValues(operation).Add(float64(rw.bytesWritten))
 		}
 
-		if r.ContentLength > 0 {
-			metrics.BytesReceived.WithLabelValues(operation).Add(float64(r.ContentLength))
+		if body != nil && body.bytesRead > 0 {
+			metrics.BytesReceived.WithLabelValues(operation).Add(float64(body.bytesRead))
 		}
 
 		// Track errors

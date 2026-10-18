@@ -63,7 +63,11 @@ func BenchmarkServer(b *testing.B) {
 		b.ResetTimer()
 		for b.Loop() {
 			r := req.Clone(req.Context())
-			r.Body = io.NopCloser(bytes.NewReader(body))
+			// The server gives requests without a body http.NoBody
+			r.Body = http.NoBody
+			if len(body) > 0 {
+				r.Body = io.NopCloser(bytes.NewReader(body))
+			}
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, r)
 			if w.Code != wantStatus {
