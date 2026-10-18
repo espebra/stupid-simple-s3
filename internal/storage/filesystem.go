@@ -310,19 +310,33 @@ func (fs *FilesystemStorage) bucketTmpDir(bucket string) string {
 	return filepath.Join(fs.basePath, "buckets", filepath.Clean("/"+bucket), "tmp")
 }
 
-// newTempFilePaths returns paths for the data and metadata temp files of a
-// write to a bucket, creating the bucket's temp directory if needed (buckets
-// created before it existed get it on their first write)
-func (fs *FilesystemStorage) newTempFilePaths(bucket string) (dataTmpPath, metaTmpPath string, err error) {
+// createTempFiles creates the data temp file of a write to a bucket, and
+// returns it with its path and the path for the metadata temp file. The
+// bucket's temp directory nearly always exists, so the file is created
+// directly, and the directory only when that fails because it is missing
+// (buckets created before it existed get it on their first write). That
+// saves a mkdir on every write. The caller must hold the bucket's read
+// lock, so that DeleteBucket cannot remove the directory in between.
+func (fs *FilesystemStorage) createTempFiles(bucket string) (dataTmpFile *os.File, dataTmpPath, metaTmpPath string, err error) {
 	dir := fs.bucketTmpDir(bucket)
-	if err := os.Mkdir(dir, 0700); err != nil && !os.IsExist(err) {
-		if isMissingDirError(err) {
-			return "", "", ErrBucketNotFound
-		}
-		return "", "", fmt.Errorf("creating bucket temp directory: %w", err)
-	}
 	id := uuid.New().String()
-	return filepath.Join(dir, id+".data"), filepath.Join(dir, id+".meta"), nil
+	dataTmpPath = filepath.Join(dir, id+".data")
+	metaTmpPath = filepath.Join(dir, id+".meta")
+
+	dataTmpFile, err = os.Create(dataTmpPath)
+	if os.IsNotExist(err) {
+		if err := os.Mkdir(dir, 0700); err != nil && !os.IsExist(err) {
+			if isMissingDirError(err) {
+				return nil, "", "", ErrBucketNotFound
+			}
+			return nil, "", "", fmt.Errorf("creating bucket temp directory: %w", err)
+		}
+		dataTmpFile, err = os.Create(dataTmpPath)
+	}
+	if err != nil {
+		return nil, "", "", fmt.Errorf("creating temp file: %w", err)
+	}
+	return dataTmpFile, dataTmpPath, metaTmpPath, nil
 }
 
 // BucketExists checks if a bucket exists
@@ -544,13 +558,9 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 	// temp files, so concurrent writes to the same key do not conflict.
 	// The object directory is only created once the data has been received
 	// (prepareObjectDir), so a failed upload leaves nothing behind.
-	tmpPath, metaTmpPath, err := fs.newTempFilePaths(bucket)
+	tmpFile, tmpPath, metaTmpPath, err := fs.createTempFiles(bucket)
 	if err != nil {
 		return nil, err
-	}
-	tmpFile, err := os.Create(tmpPath)
-	if err != nil {
-		return nil, fmt.Errorf("creating temp file: %w", err)
 	}
 
 	// Calculate SHA-256 while writing

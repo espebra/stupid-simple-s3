@@ -257,17 +257,12 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	bucketLock.RLock()
 	defer bucketLock.RUnlock()
 
-	tmpPath, metaTmpPath, err := fs.newTempFilePaths(uploadMeta.Bucket)
-	if err != nil {
-		return nil, err
-	}
-
 	// Concatenate all parts. Copying file to file lets the kernel use
 	// copy_file_range, which avoids user-space copies and can share extents
 	// on filesystems that support reflinks.
-	outFile, err := os.Create(tmpPath)
+	outFile, tmpPath, metaTmpPath, err := fs.createTempFiles(uploadMeta.Bucket)
 	if err != nil {
-		return nil, fmt.Errorf("creating output file: %w", err)
+		return nil, err
 	}
 
 	for _, part := range parts {
