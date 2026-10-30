@@ -2218,6 +2218,95 @@ func TestResponseWriterReadFrom(t *testing.T) {
 	}
 }
 
+func TestConditionalPutObject(t *testing.T) {
+	handlers, store, cleanup := setupTestHandlers(t)
+	defer cleanup()
+
+	meta, err := store.PutObject("test-bucket", "head", "text/plain", nil, strings.NewReader("v1"))
+	if err != nil {
+		t.Fatalf("PutObject failed: %v", err)
+	}
+	etag := meta.ETag
+
+	tests := []struct {
+		name    string
+		key     string
+		headers map[string]string
+		want    int
+		code    s3.ErrorCode
+	}{
+		{"If-None-Match star, object exists", "head", map[string]string{"If-None-Match": "*"}, http.StatusPreconditionFailed, s3.ErrPreconditionFailed},
+		{"If-None-Match star, no object", "new", map[string]string{"If-None-Match": "*"}, http.StatusOK, ""},
+		{"If-None-Match ETag", "head", map[string]string{"If-None-Match": etag}, http.StatusNotImplemented, s3.ErrNotImplemented},
+		{"If-Match differs", "head", map[string]string{"If-Match": `"other"`}, http.StatusPreconditionFailed, s3.ErrPreconditionFailed},
+		{"If-Match weak", "head", map[string]string{"If-Match": "W/" + etag}, http.StatusPreconditionFailed, s3.ErrPreconditionFailed},
+		{"If-Match, no object", "missing", map[string]string{"If-Match": etag}, http.StatusNotFound, s3.ErrNoSuchKey},
+		{"If-Match matches", "head", map[string]string{"If-Match": etag}, http.StatusOK, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before, _ := store.HeadObject("test-bucket", tt.key)
+			body := "written by " + tt.name
+			req := httptest.NewRequest("PUT", "/test-bucket/"+tt.key, strings.NewReader(body))
+			req.SetPathValue("bucket", "test-bucket")
+			req.SetPathValue("key", tt.key)
+			for k, v := range tt.headers {
+				req.Header.Set(k, v)
+			}
+			w := httptest.NewRecorder()
+			handlers.PutObject(w, req)
+
+			if tt.code != "" {
+				assertErrorCode(t, w, tt.want, tt.code)
+				after, _ := store.HeadObject("test-bucket", tt.key)
+				if (before == nil) != (after == nil) || (before != nil && before.ETag != after.ETag) {
+					t.Errorf("failed write changed the object")
+				}
+				return
+			}
+			if w.Code != tt.want {
+				t.Fatalf("status = %d, want %d: %s", w.Code, tt.want, w.Body.String())
+			}
+			after, err := store.HeadObject("test-bucket", tt.key)
+			if err != nil {
+				t.Fatalf("HeadObject failed: %v", err)
+			}
+			if w.Header().Get("ETag") != after.ETag {
+				t.Errorf("ETag = %q, want %q", w.Header().Get("ETag"), after.ETag)
+			}
+		})
+	}
+
+	// Two writers read the same ETag; the first replaces the object, so the
+	// second's ETag is stale
+	t.Run("If-Match stale", func(t *testing.T) {
+		read, err := store.PutObject("test-bucket", "stale", "text/plain", nil, strings.NewReader("v1"))
+		if err != nil {
+			t.Fatalf("PutObject failed: %v", err)
+		}
+		for i, want := range []int{http.StatusOK, http.StatusPreconditionFailed} {
+			req := httptest.NewRequest("PUT", "/test-bucket/stale", strings.NewReader(fmt.Sprintf("writer %d", i)))
+			req.SetPathValue("bucket", "test-bucket")
+			req.SetPathValue("key", "stale")
+			req.Header.Set("If-Match", read.ETag)
+			w := httptest.NewRecorder()
+			handlers.PutObject(w, req)
+			if w.Code != want {
+				t.Fatalf("writer %d: status = %d, want %d", i, w.Code, want)
+			}
+		}
+		reader, _, err := store.GetObject("test-bucket", "stale")
+		if err != nil {
+			t.Fatalf("GetObject failed: %v", err)
+		}
+		defer func() { _ = reader.Close() }()
+		if data, _ := io.ReadAll(reader); string(data) != "writer 0" {
+			t.Errorf("object = %q, want %q", data, "writer 0")
+		}
+	})
+}
+
 func TestConditionalRequests(t *testing.T) {
 	handlers, store, cleanup := setupTestHandlers(t)
 	defer cleanup()

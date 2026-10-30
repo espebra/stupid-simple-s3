@@ -746,6 +746,29 @@ func TestCompleteMultipartUploadLegacyPart(t *testing.T) {
 	}
 }
 
+// TestConditionalPutIfNoneMatch tests that a write that only creates an
+// object fails once the object exists
+func TestConditionalPutIfNoneMatch(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	ifAbsent := func(current *s3.ObjectMetadata) error {
+		if current != nil {
+			return ErrPreconditionFailed
+		}
+		return nil
+	}
+	if _, err := storage.PutObjectConditional(testBucket, "create-once", "text/plain", nil, bytes.NewReader([]byte("first")), ifAbsent); err != nil {
+		t.Fatalf("first create failed: %v", err)
+	}
+	if _, err := storage.PutObjectConditional(testBucket, "create-once", "text/plain", nil, bytes.NewReader([]byte("second")), ifAbsent); !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("second create: err = %v, want ErrPreconditionFailed", err)
+	}
+	if _, err := storage.PutObjectConditional(testBucket, "missing", "text/plain", nil, bytes.NewReader([]byte("x")), ifETag(`"abc"`)); !errors.Is(err, ErrObjectNotFound) {
+		t.Fatalf("If-Match on missing object: err = %v, want ErrObjectNotFound", err)
+	}
+}
+
 func TestPutObjectMissingBucket(t *testing.T) {
 	storage, cleanup := setupTestStorage(t)
 	defer cleanup()

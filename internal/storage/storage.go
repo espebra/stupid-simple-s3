@@ -13,6 +13,12 @@ type ObjectAttributes struct {
 	UserMetadata map[string]string
 }
 
+// WriteCondition decides whether a conditional write may replace the
+// current object. current is nil if there is no object. It returns nil to
+// let the write go ahead, or the error that the write fails with, such as
+// ErrPreconditionFailed.
+type WriteCondition func(current *s3.ObjectMetadata) error
+
 // ListObjectsOptions contains options for listing objects
 type ListObjectsOptions struct {
 	Prefix            string
@@ -41,6 +47,11 @@ type ListObjectsResult struct {
 type Storage interface {
 	// PutObject stores an object with the given key
 	PutObject(bucket, key string, contentType string, metadata map[string]string, body io.Reader) (*s3.ObjectMetadata, error)
+
+	// PutObjectConditional stores an object with the given key if cond,
+	// when not nil, accepts the object it replaces. cond is checked
+	// atomically with the commit of the write.
+	PutObjectConditional(bucket, key string, contentType string, metadata map[string]string, body io.Reader, cond WriteCondition) (*s3.ObjectMetadata, error)
 
 	// GetObject retrieves an object by key. The reader is seekable, so a
 	// range can be read from the same open object that the metadata describes.

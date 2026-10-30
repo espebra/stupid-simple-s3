@@ -250,7 +250,8 @@ Notes:
 - ListParts supports `part-number-marker` and `max-parts`.
 - CopyObject supports `x-amz-metadata-directive`: `COPY` (the default) keeps the source's content type and user metadata, `REPLACE` takes them from the request. Other `x-amz-copy-source-*` conditions are not supported.
 - ListObjects (version 1) supports `prefix`, `delimiter`, `marker` and `max-keys`, and returns `NextMarker` for truncated pages listed with a delimiter.
-- GetObject and HeadObject support the conditional headers `If-Match`, `If-None-Match`, `If-Modified-Since` and `If-Unmodified-Since`, answering `304 Not Modified` or `412 Precondition Failed` as S3 does. A 304 response does not read the object data, so a cache such as Varnish can revalidate objects cheaply. Conditional writes are not supported.
+- GetObject and HeadObject support the conditional headers `If-Match`, `If-None-Match`, `If-Modified-Since` and `If-Unmodified-Since`, answering `304 Not Modified` or `412 Precondition Failed` as S3 does. A 304 response does not read the object data, so a cache such as Varnish can revalidate objects cheaply.
+- PutObject supports conditional writes. `If-None-Match: *` writes the object only if the key does not exist, and `If-Match: <etag>` replaces the object only if its ETag still matches; otherwise the write fails with `412 PreconditionFailed`, or `404 NoSuchKey` for `If-Match` on a key that does not exist. The condition is checked atomically with the commit of the write, so of several concurrent writes conditioned on the same ETag exactly one succeeds, which makes a small object usable as a compare-and-swap pointer. `If-None-Match` with an ETag answers `501 NotImplemented`, as in S3. CopyObject and CompleteMultipartUpload do not support conditional writes.
 
 ## Health check endpoints
 

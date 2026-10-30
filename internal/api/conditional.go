@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/espen/stupid-simple-s3/internal/s3"
+	"github.com/espen/stupid-simple-s3/internal/storage"
 )
 
 // checkPreconditions evaluates the conditional request headers of a GET or
@@ -39,6 +40,37 @@ func checkPreconditions(r *http.Request, meta *s3.ObjectMetadata) int {
 	}
 
 	return 0
+}
+
+// writeCondition returns the condition of a conditional PutObject, or nil
+// if the request has none. As in S3, If-None-Match: * only writes the
+// object if there is none, and If-Match only replaces an object whose ETag
+// matches, failing with storage.ErrObjectNotFound if there is no object.
+// If-None-Match with an ETag is not supported by S3 for writes, and gives
+// s3.ErrNotImplemented.
+func writeCondition(r *http.Request) (storage.WriteCondition, s3.ErrorCode) {
+	ifMatch := r.Header.Get("If-Match")
+	ifNoneMatch := r.Header.Get("If-None-Match")
+	if ifMatch == "" && ifNoneMatch == "" {
+		return nil, ""
+	}
+	if ifNoneMatch != "" && strings.TrimSpace(ifNoneMatch) != "*" {
+		return nil, s3.ErrNotImplemented
+	}
+	return func(current *s3.ObjectMetadata) error {
+		if ifMatch != "" {
+			if current == nil {
+				return storage.ErrObjectNotFound
+			}
+			if !etagListMatches(ifMatch, current.ETag, true) {
+				return storage.ErrPreconditionFailed
+			}
+		}
+		if ifNoneMatch != "" && current != nil {
+			return storage.ErrPreconditionFailed
+		}
+		return nil
+	}, ""
 }
 
 // parseHTTPDate parses an HTTP date header value. Most requests send no
