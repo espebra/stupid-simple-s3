@@ -419,6 +419,52 @@ func TestAWSSDK_ConditionalGet(t *testing.T) {
 	})
 }
 
+// TestAWSSDK_ConditionalPut tests conditional writes with the AWS SDK:
+// If-None-Match: * to create an object only once, and If-Match to replace
+// it only if it has not changed since it was read
+func TestAWSSDK_ConditionalPut(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	ctx := context.Background()
+	client := ts.AWSClient(ctx)
+	put := func(body string, ifMatch, ifNoneMatch *string) (*s3.PutObjectOutput, error) {
+		return client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:      aws.String(TestBucket),
+			Key:         aws.String("pointer"),
+			Body:        strings.NewReader(body),
+			IfMatch:     ifMatch,
+			IfNoneMatch: ifNoneMatch,
+		})
+	}
+
+	_, err := put("v0", aws.String(`"other"`), nil)
+	assertAPIErrorCode(t, err, "NoSuchKey")
+
+	first, err := put("v1", nil, aws.String("*"))
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	_, err = put("v1 again", nil, aws.String("*"))
+	assertAPIErrorCode(t, err, "PreconditionFailed")
+
+	second, err := put("v2", first.ETag, nil)
+	if err != nil {
+		t.Fatalf("replace with current ETag failed: %v", err)
+	}
+	_, err = put("v2 from a stale read", first.ETag, nil)
+	assertAPIErrorCode(t, err, "PreconditionFailed")
+
+	result, err := client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(TestBucket), Key: aws.String("pointer")})
+	if err != nil {
+		t.Fatalf("GetObject failed: %v", err)
+	}
+	defer func() { _ = result.Body.Close() }()
+	if data, _ := io.ReadAll(result.Body); string(data) != "v2" || aws.ToString(result.ETag) != aws.ToString(second.ETag) {
+		t.Errorf("object = %q with ETag %s, want \"v2\" with ETag %s", data, aws.ToString(result.ETag), aws.ToString(second.ETag))
+	}
+}
+
 // TestAWSSDK_PutGetObject tests basic object upload and download
 func TestAWSSDK_PutGetObject(t *testing.T) {
 	ts := NewTestServer(t)

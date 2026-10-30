@@ -59,6 +59,10 @@ var ErrInvalidPartOrder = errors.New("parts must be in ascending order")
 // ErrBadDigest is returned when uploaded data does not match the checksum sent by the client
 var ErrBadDigest = errors.New("checksum mismatch")
 
+// ErrPreconditionFailed is returned by a WriteCondition when the object
+// it was checked against does not satisfy it
+var ErrPreconditionFailed = errors.New("precondition failed")
+
 // EncodeChecksum returns a digest in the base64 form used by the
 // x-amz-checksum-sha256 header.
 func EncodeChecksum(sum []byte) string {
@@ -544,9 +548,24 @@ func (fs *FilesystemStorage) DeleteBucket(name string) error {
 
 // PutObject stores an object with the given key
 func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, metadata map[string]string, body io.Reader) (*s3.ObjectMetadata, error) {
+	return fs.PutObjectConditional(bucket, key, contentType, metadata, body, nil)
+}
+
+// PutObjectConditional stores an object with the given key if cond, when
+// not nil, accepts the object it replaces
+func (fs *FilesystemStorage) PutObjectConditional(bucket, key string, contentType string, metadata map[string]string, body io.Reader, cond WriteCondition) (*s3.ObjectMetadata, error) {
 	objPath, err := fs.keyToPath(bucket, key)
 	if err != nil {
 		return nil, err
+	}
+
+	// Check the condition before receiving the data as well, so that a
+	// write that is bound to fail does not write the object to disk. It is
+	// checked again when the write is committed.
+	if cond != nil {
+		if err := checkWriteCondition(objPath, cond); err != nil {
+			return nil, err
+		}
 	}
 
 	// Keep the bucket from being deleted until the write is committed
@@ -603,11 +622,23 @@ func (fs *FilesystemStorage) PutObject(bucket, key string, contentType string, m
 		_ = os.Remove(metaTmpPath)
 		return nil, err
 	}
-	if err := fs.commitObject(bucket, objPath, tmpPath, metaTmpPath, objMeta); err != nil {
+	if err := fs.commitObject(bucket, objPath, tmpPath, metaTmpPath, objMeta, cond); err != nil {
 		return nil, err
 	}
 
 	return objMeta, nil
+}
+
+// checkWriteCondition calls cond with the current metadata of the object
+// at objPath, or nil if there is no object
+func checkWriteCondition(objPath string, cond WriteCondition) error {
+	current, err := readObjectMetadata(filepath.Join(objPath, "meta.json"))
+	if errors.Is(err, ErrObjectNotFound) {
+		current = nil
+	} else if err != nil {
+		return err
+	}
+	return cond(current)
 }
 
 // GetObject retrieves an object by key
@@ -668,11 +699,22 @@ func readObjectMetadata(metaPath string) (*s3.ObjectMetadata, error) {
 // Both renames happen under the object's commit lock, so concurrent writes
 // to the same key cannot interleave and leave the data of one write with
 // the metadata of another. If the metadata cannot be renamed, the data file
-// is removed as well.
-func (fs *FilesystemStorage) commitObject(bucket, objPath, dataTmpPath, metaTmpPath string, meta *s3.ObjectMetadata) error {
+// is removed as well. If cond is not nil, it is checked against the object
+// being replaced under the same lock, so that of several conditional writes
+// to the same key, each sees the object the previous one committed. If it
+// fails, the temp files are removed.
+func (fs *FilesystemStorage) commitObject(bucket, objPath, dataTmpPath, metaTmpPath string, meta *s3.ObjectMetadata, cond WriteCondition) error {
 	commit := fs.commitLock(objPath)
 	commit.Lock()
 	defer commit.Unlock()
+
+	if cond != nil {
+		if err := checkWriteCondition(objPath, cond); err != nil {
+			_ = os.Remove(dataTmpPath)
+			_ = os.Remove(metaTmpPath)
+			return err
+		}
+	}
 
 	dataPath := filepath.Join(objPath, "data")
 	if err := rename(dataTmpPath, dataPath); err != nil {

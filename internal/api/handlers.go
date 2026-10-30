@@ -300,6 +300,14 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Conditional write (If-Match / If-None-Match: *)
+	cond, code := writeCondition(r)
+	if code != "" {
+		drainRequestBody(r)
+		s3.WriteErrorResponse(w, code)
+		return
+	}
+
 	// Handle AWS chunked encoding (used by Minio SDK and some AWS SDK configurations)
 	// and verify the client's SHA-256 checksum, if sent
 	body, err := uploadBody(r, h.cfg.Limits.MaxChunkSize)
@@ -314,9 +322,17 @@ func (h *Handlers) PutObject(w http.ResponseWriter, r *http.Request) {
 		body = newLimitedReader(body, h.cfg.Limits.MaxObjectSize)
 	}
 
-	meta, err := h.storage.PutObject(bucket, key, contentType, userMetadata, body)
+	meta, err := h.storage.PutObjectConditional(bucket, key, contentType, userMetadata, body, cond)
 	if err != nil {
 		drainRequestBody(r)
+		if errors.Is(err, storage.ErrPreconditionFailed) {
+			s3.WriteErrorResponse(w, s3.ErrPreconditionFailed)
+			return
+		}
+		if errors.Is(err, storage.ErrObjectNotFound) {
+			s3.WriteErrorResponse(w, s3.ErrNoSuchKey)
+			return
+		}
 		if errors.Is(err, storage.ErrEntityTooLarge) {
 			s3.WriteErrorResponse(w, s3.ErrEntityTooLarge)
 			return

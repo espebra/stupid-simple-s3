@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"runtime"
 	"slices"
 	"sync"
@@ -1072,4 +1073,102 @@ func TestConcurrentGetDuringOverwrite(t *testing.T) {
 	}
 	close(stop)
 	writers.Wait()
+}
+
+// gatedReader returns its data only once gate is closed
+type gatedReader struct {
+	gate <-chan struct{}
+	r    io.Reader
+}
+
+func (g *gatedReader) Read(p []byte) (int, error) {
+	<-g.gate
+	return g.r.Read(p)
+}
+
+// ifETag is a WriteCondition that only replaces an object with the given
+// ETag, like a PutObject with If-Match
+func ifETag(etag string) WriteCondition {
+	return func(current *s3.ObjectMetadata) error {
+		if current == nil {
+			return ErrObjectNotFound
+		}
+		if current.ETag != etag {
+			return ErrPreconditionFailed
+		}
+		return nil
+	}
+}
+
+// TestConcurrentConditionalPuts tests that of concurrent writes with the
+// same If-Match ETag, exactly one replaces the object. The bodies are held
+// back until every write has passed the check made before receiving the
+// data, so the check at commit is what decides.
+func TestConcurrentConditionalPuts(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	const key = "conditional/head"
+	initial, err := storage.PutObject(testBucket, key, "text/plain", nil, bytes.NewReader([]byte("initial")))
+	if err != nil {
+		t.Fatalf("PutObject failed: %v", err)
+	}
+
+	const writers = 20
+	gate := make(chan struct{})
+	var started, done sync.WaitGroup
+	var wins, failed atomic.Int32
+	var winner atomic.Value
+	for i := range writers {
+		started.Add(1)
+		done.Add(1)
+		go func() {
+			defer done.Done()
+			content := fmt.Sprintf("writer %d", i)
+			cond := ifETag(initial.ETag)
+			checked := false
+			wrapped := func(current *s3.ObjectMetadata) error {
+				if !checked {
+					checked = true
+					defer started.Done()
+				}
+				return cond(current)
+			}
+			_, err := storage.PutObjectConditional(testBucket, key, "text/plain", nil, &gatedReader{gate: gate, r: bytes.NewReader([]byte(content))}, wrapped)
+			switch {
+			case err == nil:
+				wins.Add(1)
+				winner.Store(content)
+			case errors.Is(err, ErrPreconditionFailed):
+				failed.Add(1)
+			default:
+				t.Errorf("writer %d: %v", i, err)
+			}
+		}()
+	}
+	started.Wait()
+	close(gate)
+	done.Wait()
+
+	if wins.Load() != 1 || failed.Load() != writers-1 {
+		t.Fatalf("wins = %d, failed = %d, want 1 and %d", wins.Load(), failed.Load(), writers-1)
+	}
+	reader, _, err := storage.GetObject(testBucket, key)
+	if err != nil {
+		t.Fatalf("GetObject failed: %v", err)
+	}
+	got, _ := io.ReadAll(reader)
+	_ = reader.Close()
+	if string(got) != winner.Load().(string) {
+		t.Errorf("object = %q, want the winner's %q", got, winner.Load())
+	}
+
+	// The writes that lost removed their temp files
+	entries, err := os.ReadDir(storage.bucketTmpDir(testBucket))
+	if err != nil {
+		t.Fatalf("ReadDir failed: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("%d temp files left behind", len(entries))
+	}
 }

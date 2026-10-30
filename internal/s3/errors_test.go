@@ -135,6 +135,7 @@ func TestAllErrorCodesHaveStatusCodes(t *testing.T) {
 		ErrExpiredToken,
 		ErrXAmzContentSHA256Mismatch,
 		ErrPreconditionFailed,
+		ErrNotImplemented,
 	}
 
 	for _, code := range codes {
@@ -174,6 +175,7 @@ func TestAllErrorCodesHaveMessages(t *testing.T) {
 		ErrExpiredToken,
 		ErrXAmzContentSHA256Mismatch,
 		ErrPreconditionFailed,
+		ErrNotImplemented,
 	}
 
 	for _, code := range codes {

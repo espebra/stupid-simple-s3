@@ -315,7 +315,7 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 		_ = os.Remove(metaTmpPath)
 		return nil, err
 	}
-	if err := fs.commitObject(uploadMeta.Bucket, objPath, tmpPath, metaTmpPath, objMeta); err != nil {
+	if err := fs.commitObject(uploadMeta.Bucket, objPath, tmpPath, metaTmpPath, objMeta, nil); err != nil {
 		return nil, err
 	}
 
