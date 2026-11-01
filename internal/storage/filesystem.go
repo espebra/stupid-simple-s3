@@ -44,7 +44,8 @@ var ErrEntityTooLarge = errors.New("entity too large")
 // ErrUploadNotFound is returned when a multipart upload does not exist
 var ErrUploadNotFound = errors.New("upload not found")
 
-// ErrPartNotFound is returned when a multipart upload part does not exist
+// ErrPartNotFound is returned when a multipart upload part does not exist,
+// or exists with another ETag than the one given. S3 answers InvalidPart for both.
 var ErrPartNotFound = errors.New("part not found")
 
 // ErrEntityTooSmall is returned when a part other than the last is smaller than the minimum part size
