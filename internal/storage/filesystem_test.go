@@ -21,7 +21,7 @@ import (
 
 const testBucket = "test-bucket"
 
-func setupTestStorage(t *testing.T) (*FilesystemStorage, func()) {
+func setupTestStorage(t testing.TB) (*FilesystemStorage, func()) {
 	t.Helper()
 
 	tmpDir, err := os.MkdirTemp("", "sss-test-*")

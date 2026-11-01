@@ -27,7 +27,7 @@ import (
 )
 
 // Since auth testing is complex, we'll test handlers without auth middleware
-func setupTestHandlers(t *testing.T) (*Handlers, storage.MultipartStorage, func()) {
+func setupTestHandlers(t testing.TB) (*Handlers, storage.MultipartStorage, func()) {
 	t.Helper()
 
 	tmpDir, err := os.MkdirTemp("", "sss-handlers-test-*")

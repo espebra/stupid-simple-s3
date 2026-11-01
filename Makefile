@@ -1,4 +1,4 @@
-.PHONY: build run test bench fuzz clean vendor fmt fmt-check
+.PHONY: build run test bench fuzz shortfuzz clean vendor fmt fmt-check
 
 BINARY_NAME=stupid-simple-s3
 BUILD_DIR=bin
@@ -21,30 +21,28 @@ bench:
 
 FUZZ_DURATION ?= 1h
 SHORTFUZZ_DURATION ?= 30s
+# Workers per fuzz target. Empty means GOMAXPROCS. Set it when running
+# targets in parallel, e.g. make -j16 fuzz FUZZ_PARALLEL=8 on 128 cores.
+FUZZ_PARALLEL ?=
 
-# Fuzz targets: package:FuncName
-FUZZ_TARGETS = \
-	./internal/auth/:FuzzParseAuthorization \
-	./internal/auth/:FuzzParsePresignedURL \
-	./internal/auth/:FuzzURIEncode \
-	./internal/auth/:FuzzIsValidIPHeader \
-	./internal/auth/:FuzzBuildCanonicalQueryStringSingle \
-	./internal/auth/:FuzzBuildCanonicalQueryStringMultiple \
-	./internal/auth/:FuzzGetPresignedAccessKeyID \
-	./internal/auth/:FuzzBuildCanonicalHeaders \
-	./internal/api/:FuzzAWSChunkedReader
+FUZZ_AUTH = FuzzParseAuthorization FuzzParsePresignedURL FuzzURIEncode \
+	FuzzIsValidIPHeader FuzzBuildCanonicalQueryStringSingle \
+	FuzzBuildCanonicalQueryStringMultiple FuzzGetPresignedAccessKeyID \
+	FuzzBuildCanonicalHeaders
+FUZZ_API = FuzzAWSChunkedReader FuzzRangeRequest FuzzConditionalHeaders \
+	FuzzDeleteObjectsBody FuzzCompleteMultipartUploadBody
+FUZZ_STORAGE = FuzzValidateBucketName FuzzKeyToPath FuzzUploadDir
 
-# Run fuzz targets, then replay any corpus failures found.
-# go test -fuzz exits non-zero on timeout, so we ignore its exit code
-# and rely on the final replay pass to detect real failures.
-fuzz:
-	@for target in $(FUZZ_TARGETS); do \
-		pkg=$${target%%:*}; func=$${target##*:}; \
-		echo "--- fuzzing $$func ($$pkg) ---"; \
-		go test -fuzz=$$func -fuzztime=$(FUZZ_DURATION) $$pkg || true; \
-	done
-	@echo "--- replaying corpus ---"
-	go test ./internal/auth/ ./internal/api/
+fuzz_pkg = $(if $(filter $(1),$(FUZZ_AUTH)),./internal/auth/,$(if $(filter $(1),$(FUZZ_API)),./internal/api/,$(if $(filter $(1),$(FUZZ_STORAGE)),./internal/storage/,$(error unknown fuzz target $(1)))))
+
+# Run every fuzz target for FUZZ_DURATION, one after another, or in parallel
+# with make -j. A target that finds a failure exits non-zero, which stops
+# make, and writes the failing input to testdata/fuzz, where go test replays
+# it from then on. Reaching FUZZ_DURATION exits zero.
+fuzz: $(addprefix fuzz-,$(FUZZ_AUTH) $(FUZZ_API) $(FUZZ_STORAGE))
+
+fuzz-%:
+	go test -mod=vendor -run='^$$' -fuzz='^$*$$' -fuzztime=$(FUZZ_DURATION) $(if $(FUZZ_PARALLEL),-parallel=$(FUZZ_PARALLEL)) $(call fuzz_pkg,$*)
 
 shortfuzz:
 	@$(MAKE) fuzz FUZZ_DURATION=$(SHORTFUZZ_DURATION)
