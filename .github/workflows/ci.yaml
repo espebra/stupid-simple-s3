@@ -89,10 +89,7 @@ jobs:
           cache: false
 
       - name: Run fuzz tests
-        run: |
-          go test -fuzz=FuzzParseAuthorization -fuzztime=10s ./internal/auth/
-          go test -fuzz=FuzzParsePresignedURL -fuzztime=10s ./internal/auth/
-          go test -fuzz=FuzzURIEncode -fuzztime=10s ./internal/auth/
+        run: make shortfuzz SHORTFUZZ_DURATION=10s
 
   build:
     runs-on: ubuntu-latest
