@@ -229,7 +229,7 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 		actualETag := strings.Trim(partMeta.ETag, "\"")
 
 		if expectedETag != actualETag {
-			return nil, fmt.Errorf("part %d ETag mismatch: expected %s, got %s", part.PartNumber, expectedETag, actualETag)
+			return nil, fmt.Errorf("part %d ETag mismatch: expected %s, got %s: %w", part.PartNumber, expectedETag, actualETag, ErrPartNotFound)
 		}
 
 		// Every part except the last must be at least the minimum part size
