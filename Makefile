@@ -1,4 +1,4 @@
-.PHONY: build run test bench fuzz shortfuzz clean vendor fmt fmt-check
+.PHONY: build run test bench fuzz shortfuzz soak clean vendor fmt fmt-check
 
 BINARY_NAME=stupid-simple-s3
 BUILD_DIR=bin
@@ -46,6 +46,15 @@ fuzz-%:
 
 shortfuzz:
 	@$(MAKE) fuzz FUZZ_DURATION=$(SHORTFUZZ_DURATION)
+
+SOAK_DURATION ?= 1h
+SOAK_FLAGS ?=
+
+# Run a mixed S3 workload against a freshly started server, checking every
+# object read back and that the server leaks no goroutines, fds, memory,
+# temp files or uploads. See tests/soak/main.go for the flags.
+soak: build
+	go run -mod=vendor ./tests/soak -server $(BUILD_DIR)/$(BINARY_NAME) -duration $(SOAK_DURATION) $(SOAK_FLAGS)
 
 clean:
 	rm -rf $(BUILD_DIR)
