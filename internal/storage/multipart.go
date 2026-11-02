@@ -101,6 +101,7 @@ func (fs *FilesystemStorage) UploadPart(uploadID string, partNumber int, body io
 
 	// Check upload exists
 	if _, err := os.Stat(uploadPath); os.IsNotExist(err) {
+		fs.forgetUploadLock(uploadID)
 		return nil, ErrUploadNotFound
 	}
 
@@ -185,6 +186,7 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	// Get upload metadata (internal call, lock already held)
 	uploadMeta, err := fs.getMultipartUploadInternal(uploadID)
 	if err != nil {
+		fs.forgetUploadLockIfGone(uploadID)
 		return nil, err
 	}
 
@@ -315,7 +317,9 @@ func (fs *FilesystemStorage) CompleteMultipartUpload(uploadID string, parts []s3
 	}
 
 	// Clean up multipart upload directory
-	_ = os.RemoveAll(uploadPath)
+	if err := os.RemoveAll(uploadPath); err == nil {
+		fs.forgetUploadLock(uploadID)
+	}
 
 	return objMeta, nil
 }
@@ -333,12 +337,14 @@ func (fs *FilesystemStorage) AbortMultipartUpload(uploadID string) error {
 	uploadPath := fs.uploadDir(uploadID)
 
 	if _, err := os.Stat(uploadPath); os.IsNotExist(err) {
+		fs.forgetUploadLock(uploadID)
 		return ErrUploadNotFound
 	}
 
 	if err := os.RemoveAll(uploadPath); err != nil {
 		return fmt.Errorf("removing upload: %w", err)
 	}
+	fs.forgetUploadLock(uploadID)
 
 	return nil
 }
@@ -351,7 +357,11 @@ func (fs *FilesystemStorage) GetMultipartUpload(uploadID string) (*s3.MultipartU
 	mu := fs.getUploadLock(uploadID)
 	mu.RLock()
 	defer mu.RUnlock()
-	return fs.getMultipartUploadInternal(uploadID)
+	meta, err := fs.getMultipartUploadInternal(uploadID)
+	if err != nil {
+		fs.forgetUploadLockIfGone(uploadID)
+	}
+	return meta, err
 }
 
 // getMultipartUploadInternal retrieves metadata without acquiring lock (caller must hold lock)
@@ -390,6 +400,7 @@ func (fs *FilesystemStorage) ListParts(uploadID string) ([]s3.PartMetadata, erro
 	entries, err := os.ReadDir(uploadPath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			fs.forgetUploadLock(uploadID)
 			return nil, ErrUploadNotFound
 		}
 		return nil, fmt.Errorf("reading upload directory: %w", err)

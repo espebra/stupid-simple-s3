@@ -1020,6 +1020,58 @@ func TestGetMultipartUploadNotFound(t *testing.T) {
 	}
 }
 
+// TestUploadLocksForgotten checks that the lock of an upload is dropped
+// once the upload is completed or aborted, or looked up after that, rather
+// than kept until the next cleanup
+func TestUploadLocksForgotten(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	var gone []string
+	for i := range 10 {
+		uploadID, err := storage.CreateMultipartUpload(testBucket, fmt.Sprintf("key-%d", i), "", nil)
+		if err != nil {
+			t.Fatalf("CreateMultipartUpload failed: %v", err)
+		}
+		part, err := storage.UploadPart(uploadID, 1, bytes.NewReader([]byte("part")))
+		if err != nil {
+			t.Fatalf("UploadPart failed: %v", err)
+		}
+		if i%2 == 0 {
+			_, err = storage.CompleteMultipartUpload(uploadID, []s3.CompletedPartInput{{PartNumber: 1, ETag: part.ETag}})
+		} else {
+			err = storage.AbortMultipartUpload(uploadID)
+		}
+		if err != nil {
+			t.Fatalf("finishing upload %d failed: %v", i, err)
+		}
+		gone = append(gone, uploadID)
+	}
+	for _, uploadID := range gone {
+		if _, err := storage.UploadPart(uploadID, 1, bytes.NewReader([]byte("late"))); !errors.Is(err, ErrUploadNotFound) {
+			t.Errorf("UploadPart on a finished upload: %v", err)
+		}
+		if _, err := storage.CompleteMultipartUpload(uploadID, nil); !errors.Is(err, ErrUploadNotFound) {
+			t.Errorf("CompleteMultipartUpload on a finished upload: %v", err)
+		}
+		if err := storage.AbortMultipartUpload(uploadID); !errors.Is(err, ErrUploadNotFound) {
+			t.Errorf("AbortMultipartUpload on a finished upload: %v", err)
+		}
+		if _, err := storage.GetMultipartUpload(uploadID); !errors.Is(err, ErrUploadNotFound) {
+			t.Errorf("GetMultipartUpload on a finished upload: %v", err)
+		}
+		if _, err := storage.ListParts(uploadID); !errors.Is(err, ErrUploadNotFound) {
+			t.Errorf("ListParts on a finished upload: %v", err)
+		}
+	}
+
+	n := 0
+	storage.uploadLocks.Range(func(_, _ any) bool { n++; return true })
+	if n != 0 {
+		t.Errorf("%d upload locks left, want 0", n)
+	}
+}
+
 func TestMultipartUploadRejectsInvalidUploadID(t *testing.T) {
 	storage, cleanup := setupTestStorage(t)
 	defer cleanup()
