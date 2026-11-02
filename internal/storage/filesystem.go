@@ -618,11 +618,6 @@ func (fs *FilesystemStorage) PutObjectConditional(bucket, key string, contentTyp
 		return nil, fmt.Errorf("writing metadata: %w", err)
 	}
 
-	if err := fs.prepareObjectDir(objPath); err != nil {
-		_ = os.Remove(tmpPath)
-		_ = os.Remove(metaTmpPath)
-		return nil, err
-	}
 	if err := fs.commitObject(bucket, objPath, tmpPath, metaTmpPath, objMeta, cond); err != nil {
 		return nil, err
 	}
@@ -696,14 +691,15 @@ func readObjectMetadata(metaPath string) (*s3.ObjectMetadata, error) {
 	return &meta, nil
 }
 
-// commitObject moves an object's data and metadata temp files into place.
-// Both renames happen under the object's commit lock, so concurrent writes
-// to the same key cannot interleave and leave the data of one write with
-// the metadata of another. If the metadata cannot be renamed, the data file
-// is removed as well. If cond is not nil, it is checked against the object
-// being replaced under the same lock, so that of several conditional writes
-// to the same key, each sees the object the previous one committed. If it
-// fails, the temp files are removed.
+// commitObject creates an object's directory and moves its data and
+// metadata temp files into place. This happens under the object's commit
+// lock, so a concurrent delete cannot remove the directory first, and
+// concurrent writes to the same key cannot interleave and leave the data of
+// one write with the metadata of another. If the metadata cannot be
+// renamed, the data file is removed as well. If cond is not nil, it is
+// checked against the object being replaced under the same lock, so that of
+// several conditional writes to the same key, each sees the object the
+// previous one committed. If it fails, the temp files are removed.
 func (fs *FilesystemStorage) commitObject(bucket, objPath, dataTmpPath, metaTmpPath string, meta *s3.ObjectMetadata, cond WriteCondition) error {
 	commit := fs.commitLock(objPath)
 	commit.Lock()
@@ -715,6 +711,16 @@ func (fs *FilesystemStorage) commitObject(bucket, objPath, dataTmpPath, metaTmpP
 			_ = os.Remove(metaTmpPath)
 			return err
 		}
+	}
+
+	// The directory is created under the lock, so that a delete of the
+	// same key cannot remove it before the renames. Deletes of other keys
+	// only remove the shard directory when it is empty, which it is not
+	// once the object directory is in it.
+	if err := fs.prepareObjectDir(objPath); err != nil {
+		_ = os.Remove(dataTmpPath)
+		_ = os.Remove(metaTmpPath)
+		return err
 	}
 
 	dataPath := filepath.Join(objPath, "data")

@@ -1004,6 +1004,39 @@ func TestConcurrentPutSameKeyKeepsMetadataConsistent(t *testing.T) {
 	}
 }
 
+// TestConcurrentPutAndDeleteSameKey tests that writes succeed while the key
+// is deleted at the same time. A delete can remove the object directory
+// after a write has created it and before the write commits into it.
+func TestConcurrentPutAndDeleteSameKey(t *testing.T) {
+	storage, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	const writers, deleters, rounds = 4, 4, 200
+	var wg sync.WaitGroup
+	for i := range writers {
+		wg.Go(func() {
+			data := bytes.Repeat([]byte{byte('a' + i)}, 100)
+			for round := range rounds {
+				if _, err := storage.PutObject(testBucket, "same-key", "text/plain", nil, bytes.NewReader(data)); err != nil {
+					t.Errorf("writer %d round %d: PutObject failed: %v", i, round, err)
+					return
+				}
+			}
+		})
+	}
+	for range deleters {
+		wg.Go(func() {
+			for range rounds {
+				if err := storage.DeleteObject(testBucket, "same-key"); err != nil {
+					t.Errorf("DeleteObject failed: %v", err)
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+}
+
 // TestConcurrentGetDuringOverwrite tests that a read during overwrites gets
 // the data and metadata of the same write
 func TestConcurrentGetDuringOverwrite(t *testing.T) {
