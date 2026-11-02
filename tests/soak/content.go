@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"hash/fnv"
 	"io"
 	"math/rand/v2"
+	"strings"
 )
 
 // headerSize is the size of the header at the start of every object. The
@@ -29,6 +31,10 @@ type content struct {
 	size   int64
 	// etag is the ETag the server returned for the content
 	etag string
+	// contentType and metadata are the Content-Type and user metadata the
+	// object was stored with
+	contentType string
+	metadata    map[string]string
 }
 
 func keyHash(key string) uint64 {
@@ -77,6 +83,21 @@ func multipartETag(parts [][]byte) string {
 		h.Write(sum[:])
 	}
 	return fmt.Sprintf(`"sha256-%s-%d"`, hex.EncodeToString(h.Sum(nil)), len(parts))
+}
+
+// etagChecksum is the x-amz-checksum-sha256 of an object with the given
+// ETag: the same SHA-256 in base64, with the part count of a multipart
+// object, or "" if the ETag holds no SHA-256
+func etagChecksum(etag string) string {
+	sum, parts, _ := strings.Cut(strings.TrimPrefix(strings.Trim(etag, `"`), "sha256-"), "-")
+	b, err := hex.DecodeString(sum)
+	if err != nil || len(b) != sha256.Size {
+		return ""
+	}
+	if parts != "" {
+		return base64.StdEncoding.EncodeToString(b) + "-" + parts
+	}
+	return base64.StdEncoding.EncodeToString(b)
 }
 
 // verifyRange checks that r holds exactly bytes off to off+n of c, and

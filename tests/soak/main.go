@@ -7,9 +7,14 @@
 // read is checked byte for byte, and listings must match exactly. Keys
 // shared by all workers are written concurrently, and every read of one
 // must be a complete object written to it, with its own ETag. The workload
-// includes range, conditional, copy, multipart and batch delete requests,
-// uploads interrupted halfway, uploads whose body does not match the
-// signed hash, and downloads abandoned halfway.
+// covers every operation the server supports: object reads, writes and
+// deletes with content types and user metadata, range and conditional
+// requests, copies, listings in both versions with delimiters and markers,
+// multipart uploads with their part and upload listings, aws-chunked
+// uploads, presigned requests, batch deletes, bucket creation and deletion,
+// read-only and refused credentials, and the health checks. It also
+// includes uploads interrupted halfway, uploads whose body does not match
+// the signed hash or chunk signatures, and downloads abandoned halfway.
 //
 // At every checkpoint the workers stop, every object is read back, and
 // once the server is idle its goroutines and open file descriptors must be
@@ -67,6 +72,8 @@ type config struct {
 	metricsURL     string
 	accessKey      string
 	secretKey      string
+	roAccessKey    string
+	roSecretKey    string
 	bucket         string
 	server         string
 	workdir        string
@@ -117,8 +124,10 @@ func (st *opStats) total() int64 {
 }
 
 type soak struct {
-	cfg        config
-	client     *s3.Client
+	cfg    config
+	client *s3.Client
+	// roClient uses the read-only credentials, or is nil without them
+	roClient   *s3.Client
 	presign    *s3.PresignClient
 	signer     *v4.Signer
 	creds      aws.Credentials
@@ -163,6 +172,8 @@ func main() {
 	flag.StringVar(&cfg.metricsURL, "metrics", "http://127.0.0.1:5554", "metrics listener, when not starting the server")
 	flag.StringVar(&cfg.accessKey, "access-key", envOr("STUPID_RW_ACCESS_KEY", "AKIAIOSFODNN7EXAMPLE"), "read-write access key")
 	flag.StringVar(&cfg.secretKey, "secret-key", envOr("STUPID_RW_SECRET_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"), "read-write secret key")
+	flag.StringVar(&cfg.roAccessKey, "ro-access-key", os.Getenv("STUPID_RO_ACCESS_KEY"), "read-only access key, to check that it cannot write (default with -server: a built-in key)")
+	flag.StringVar(&cfg.roSecretKey, "ro-secret-key", os.Getenv("STUPID_RO_SECRET_KEY"), "read-only secret key")
 	flag.StringVar(&cfg.bucket, "bucket", fmt.Sprintf("soak-%d", time.Now().Unix()), "bucket to create and use")
 	flag.StringVar(&cfg.server, "server", "", "server binary to start, on free ports with fresh directories")
 	flag.StringVar(&cfg.workdir, "workdir", "", "directory for the started server's data and log, and for goroutine dumps (default: a new temp directory)")
@@ -341,6 +352,16 @@ func (s *soak) setupClients() {
 		// A retry would hide a failed request
 		RetryMaxAttempts: 1,
 	})
+	if s.cfg.roAccessKey != "" && s.cfg.roSecretKey != "" {
+		s.roClient = s3.New(s3.Options{
+			Region:           region,
+			BaseEndpoint:     aws.String(s.cfg.endpoint),
+			Credentials:      credentials.NewStaticCredentialsProvider(s.cfg.roAccessKey, s.cfg.roSecretKey, ""),
+			UsePathStyle:     true,
+			HTTPClient:       s.httpClient,
+			RetryMaxAttempts: 1,
+		})
+	}
 	s.presign = s3.NewPresignClient(s.client)
 }
 
@@ -357,6 +378,9 @@ func startServer(cfg *config, exited chan<- error) (*exec.Cmd, error) {
 	}
 	cfg.endpoint = fmt.Sprintf("http://127.0.0.1:%d", port)
 	cfg.metricsURL = fmt.Sprintf("http://127.0.0.1:%d", metricsPort)
+	if cfg.roAccessKey == "" || cfg.roSecretKey == "" {
+		cfg.roAccessKey, cfg.roSecretKey = "AKIAIOSFODNN7READONLY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYREADONLY"
+	}
 	cfg.dataDir = filepath.Join(cfg.workdir, "data")
 	cfg.multipartDir = filepath.Join(cfg.workdir, "multipart")
 
@@ -375,6 +399,8 @@ func startServer(cfg *config, exited chan<- error) (*exec.Cmd, error) {
 		"STUPID_MULTIPART_PATH="+cfg.multipartDir,
 		"STUPID_RW_ACCESS_KEY="+cfg.accessKey,
 		"STUPID_RW_SECRET_KEY="+cfg.secretKey,
+		"STUPID_RO_ACCESS_KEY="+cfg.roAccessKey,
+		"STUPID_RO_SECRET_KEY="+cfg.roSecretKey,
 		// Every request is logged at info, which over hours fills the disk
 		"STUPID_LOG_LEVEL=warn",
 		// The cleanup job would remove what the leak checks look for
@@ -435,9 +461,13 @@ func (s *soak) stopServer(cmd *exec.Cmd) {
 	}
 }
 
-// deleteBucket deletes every object and the bucket
+// deleteBucket deletes every object and the bucket, and any scratch
+// bucket a failure left
 func (s *soak) deleteBucket() {
 	ctx := context.Background()
+	for _, w := range s.workers {
+		s.removeScratch(ctx, s.scratchBucket(w.id))
+	}
 	found, err := s.listKeys(ctx, "", 1000)
 	if err != nil {
 		fmt.Println("soak: cleanup:", err)
