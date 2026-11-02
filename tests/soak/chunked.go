@@ -197,8 +197,8 @@ func (w *worker) chunkedPut(ctx context.Context) {
 	}
 	w.wrote(c.size)
 
-	switch r := w.rng.IntN(10); {
-	case r == 0:
+	switch w.rng.IntN(10) {
+	case 0:
 		// Flip the first data byte: the chunk signature, or for an unsigned
 		// upload the trailing checksum, no longer matches
 		u.tamper = func(body []byte) { body[bytes.Index(body, []byte("\r\n"))+2] ^= 0x01 }
@@ -222,7 +222,7 @@ func (w *worker) chunkedPut(ctx context.Context) {
 		}
 		w.verifyKey(ctx, "chunked-put", key)
 		return
-	case r == 1:
+	case 1:
 		u.interrupt = true
 		resp, err := w.s.sendChunked(ctx, w.s.rawClient, u)
 		if err == nil {
