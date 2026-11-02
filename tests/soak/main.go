@@ -186,7 +186,7 @@ func main() {
 	flag.IntVar(&cfg.sharedKeys, "shared-keys", 16, "keys written by all workers")
 	flag.StringVar(&maxSize, "max-size", "1M", "largest single PUT, as bytes or with a K or M suffix")
 	flag.Float64Var(&cfg.rate, "rate", 1000, "operations per second over all workers, 0 for no limit")
-	flag.StringVar(&writeRate, "write-rate", "32M", "bytes per second the server may be made to write, as bytes or with a K or M suffix, 0 for no limit")
+	flag.StringVar(&writeRate, "write-rate", "100M", "bytes per second the server may be made to write, as bytes or with a K or M suffix, 0 for no limit")
 	flag.Uint64Var(&cfg.seed, "seed", uint64(time.Now().UnixNano()), "random seed, to repeat a run")
 	flag.DurationVar(&cfg.settleTimeout, "settle", 30*time.Second, "how long a checkpoint waits for goroutines to exit")
 	flag.Float64Var(&cfg.goroutineSlack, "goroutine-slack", 2, "idle goroutines allowed over the baseline")
