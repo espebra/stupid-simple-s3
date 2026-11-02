@@ -1041,4 +1041,22 @@ func (fs *FilesystemStorage) getUploadLock(uploadID string) *sync.RWMutex {
 	return v.(*sync.RWMutex)
 }
 
+// forgetUploadLock drops the lock of an upload whose directory is gone, so
+// that uploadLocks does not grow by one entry per upload until the next
+// cleanup. The caller holds the lock. Upload IDs are never reused, and
+// every operation checks under the lock that the upload exists, so a
+// caller still waiting for the dropped lock, or taking a new one, finds
+// the upload gone.
+func (fs *FilesystemStorage) forgetUploadLock(uploadID string) {
+	fs.uploadLocks.Delete(uploadID)
+}
+
+// forgetUploadLockIfGone is forgetUploadLock for callers that do not know
+// whether the upload directory is gone
+func (fs *FilesystemStorage) forgetUploadLockIfGone(uploadID string) {
+	if _, err := os.Stat(fs.uploadDir(uploadID)); os.IsNotExist(err) {
+		fs.forgetUploadLock(uploadID)
+	}
+}
+
 // Helper functions
