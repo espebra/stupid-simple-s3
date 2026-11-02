@@ -316,7 +316,7 @@ func (w *worker) rangeGet(ctx context.Context) {
 	// server must answer 416
 	var header string
 	var start, end int64
-	satisfiable := true
+	var satisfiable bool
 	switch w.rng.IntN(3) {
 	case 0:
 		start = w.rng.Int64N(size + 10)
