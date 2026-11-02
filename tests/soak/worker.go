@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -80,13 +83,19 @@ var ops = []op{
 	{"get", 18, (*worker).get},
 	{"range-get", 10, (*worker).rangeGet},
 	{"head", 6, (*worker).head},
+	{"conditional-get", 4, (*worker).conditionalGet},
 	{"conditional-put", 5, (*worker).conditionalPut},
 	{"delete", 4, (*worker).delete},
 	{"delete-objects", 2, (*worker).deleteObjects},
 	{"copy", 3, (*worker).copyObject},
-	{"list", 2, (*worker).list},
+	{"list", 3, (*worker).list},
 	{"multipart", 2, (*worker).multipart},
+	{"chunked-put", 4, (*worker).chunkedPut},
 	{"presigned-get", 2, (*worker).presignedGet},
+	{"presigned-put", 2, (*worker).presignedPut},
+	{"bucket", 1, (*worker).bucketOps},
+	{"auth", 1, (*worker).authChecks},
+	{"health", 1, (*worker).health},
 	{"interrupted-put", 3, (*worker).interruptedPut},
 	{"interrupted-get", 3, (*worker).interruptedGet},
 	{"tampered-put", 1, (*worker).tamperedPut},
@@ -202,7 +211,44 @@ func (w *worker) size() int64 {
 }
 
 func (w *worker) newContent(key string, size int64) *content {
-	return &content{genKey: key, seed: w.rng.Uint64(), size: size}
+	return &content{genKey: key, seed: w.rng.Uint64(), size: size, contentType: defaultContentType}
+}
+
+const defaultContentType = "application/octet-stream"
+
+var contentTypes = []string{defaultContentType, "text/plain; charset=utf-8", "image/png", "application/x-soak"}
+
+// setAttributes gives c a random Content-Type and user metadata, either of
+// which may be left out, and returns the Content-Type to send: "" for none
+func (w *worker) setAttributes(c *content) string {
+	sent := ""
+	c.contentType, c.metadata = defaultContentType, nil
+	if w.rng.IntN(2) == 0 {
+		sent = contentTypes[w.rng.IntN(len(contentTypes))]
+		c.contentType = sent
+	}
+	if w.rng.IntN(2) == 0 {
+		c.metadata = map[string]string{"worker": strconv.Itoa(w.id), "seed": strconv.FormatUint(c.seed, 16)}
+		if w.rng.IntN(2) == 0 {
+			c.metadata["note-2"] = "a b=c; d,e/f (g) \"h\""
+		}
+	}
+	return sent
+}
+
+// checkAttributes compares the Content-Type and user metadata of a
+// response with what the object was stored with
+func (w *worker) checkAttributes(op, key string, c *content, contentType *string, metadata map[string]string) {
+	if got := aws.ToString(contentType); got != c.contentType {
+		w.fail(op, key, "Content-Type %q, want %q", got, c.contentType)
+	}
+	got := make(map[string]string, len(metadata))
+	for k, v := range metadata {
+		got[strings.ToLower(k)] = v
+	}
+	if !maps.Equal(got, c.metadata) {
+		w.fail(op, key, "metadata %v, want %v", got, c.metadata)
+	}
 }
 
 func httpStatus(err error) int {
@@ -245,6 +291,10 @@ func (w *worker) putContent(ctx context.Context, op, key string, c *content, mut
 	if w.rng.IntN(2) == 0 {
 		in.ChecksumAlgorithm = types.ChecksumAlgorithmSha256
 	}
+	if ct := w.setAttributes(c); ct != "" {
+		in.ContentType = &ct
+	}
+	in.Metadata = c.metadata
 	if mutate != nil {
 		mutate(in)
 	}
@@ -274,8 +324,13 @@ func (w *worker) put(ctx context.Context) {
 
 // verifyKey checks that key holds what the model says, with a GET
 func (w *worker) verifyKey(ctx context.Context, op, key string) {
+	w.verifyKeyWith(ctx, w.s.client, op, key)
+}
+
+// verifyKeyWith is verifyKey with the given client
+func (w *worker) verifyKeyWith(ctx context.Context, client *s3.Client, op, key string) {
 	c := w.model[key]
-	out, err := w.s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &w.s.cfg.bucket, Key: &key})
+	out, err := client.GetObject(ctx, &s3.GetObjectInput{Bucket: &w.s.cfg.bucket, Key: &key})
 	if c == nil {
 		if err := expectError(err, http.StatusNotFound, "NoSuchKey"); err != nil {
 			w.fail(op, key, "deleted key: %v", err)
@@ -296,6 +351,7 @@ func (w *worker) verifyKey(ctx context.Context, op, key string) {
 	if aws.ToInt64(out.ContentLength) != c.size {
 		w.fail(op, key, "Content-Length %d, want %d", aws.ToInt64(out.ContentLength), c.size)
 	}
+	w.checkAttributes(op, key, c, out.ContentType, out.Metadata)
 	if err := c.verifyRange(out.Body, 0, c.size); err != nil {
 		w.fail(op, key, "%v", err)
 	}
@@ -364,7 +420,7 @@ func (w *worker) rangeGet(ctx context.Context) {
 func (w *worker) head(ctx context.Context) {
 	key := w.pickKey()
 	c := w.model[key]
-	out, err := w.s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &w.s.cfg.bucket, Key: &key})
+	out, err := w.s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &w.s.cfg.bucket, Key: &key, ChecksumMode: types.ChecksumModeEnabled})
 	if c == nil {
 		if err := expectError(err, http.StatusNotFound, ""); err != nil {
 			w.fail("head", key, "deleted key: %v", err)
@@ -378,6 +434,103 @@ func (w *worker) head(ctx context.Context) {
 	if aws.ToString(out.ETag) != c.etag || aws.ToInt64(out.ContentLength) != c.size {
 		w.fail("head", key, "ETag %s size %d, want %s size %d", aws.ToString(out.ETag), aws.ToInt64(out.ContentLength), c.etag, c.size)
 	}
+	if got, want := aws.ToString(out.ChecksumSHA256), etagChecksum(c.etag); got != want {
+		w.fail("head", key, "x-amz-checksum-sha256 %s, want %s", got, want)
+	}
+	w.checkAttributes("head", key, c, out.ContentType, out.Metadata)
+}
+
+// conditionalGet sends a GET or HEAD with a conditional header, sometimes
+// with a range, and checks that it is answered with the object, 304 or 412
+func (w *worker) conditionalGet(ctx context.Context) {
+	key := w.pickStored()
+	if key == "" {
+		return
+	}
+	c := w.model[key]
+	head, err := w.s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &w.s.cfg.bucket, Key: &key})
+	if err != nil {
+		w.fail("conditional-get", key, "head: %v", err)
+		return
+	}
+	modified := aws.ToTime(head.LastModified)
+	before := modified.Add(-time.Second)
+
+	in := &s3.GetObjectInput{Bucket: &w.s.cfg.bucket, Key: &key}
+	var cond string
+	want := http.StatusOK
+	switch w.rng.IntN(10) {
+	case 0:
+		cond, in.IfMatch = "If-Match: current", aws.String(c.etag)
+	case 1:
+		cond, in.IfMatch = "If-Match: list", aws.String(`"sha256-other", `+c.etag)
+	case 2:
+		cond, in.IfMatch, want = "If-Match: other", aws.String(`"sha256-other"`), http.StatusPreconditionFailed
+	case 3:
+		cond, in.IfNoneMatch, want = "If-None-Match: current", aws.String(c.etag), http.StatusNotModified
+	case 4:
+		cond, in.IfNoneMatch, want = "If-None-Match: weak", aws.String("W/"+c.etag), http.StatusNotModified
+	case 5:
+		cond, in.IfNoneMatch = "If-None-Match: other", aws.String(`"sha256-other"`)
+	case 6:
+		cond, in.IfModifiedSince, want = "If-Modified-Since: Last-Modified", &modified, http.StatusNotModified
+	case 7:
+		cond, in.IfModifiedSince = "If-Modified-Since: before", &before
+	case 8:
+		cond, in.IfUnmodifiedSince = "If-Unmodified-Since: Last-Modified", &modified
+	default:
+		cond, in.IfUnmodifiedSince, want = "If-Unmodified-Since: before", &before, http.StatusPreconditionFailed
+	}
+
+	if w.rng.IntN(2) == 0 {
+		out, err := w.s.client.HeadObject(ctx, &s3.HeadObjectInput{
+			Bucket: in.Bucket, Key: in.Key, IfMatch: in.IfMatch, IfNoneMatch: in.IfNoneMatch,
+			IfModifiedSince: in.IfModifiedSince, IfUnmodifiedSince: in.IfUnmodifiedSince,
+		})
+		if want != http.StatusOK {
+			if err := expectError(err, want, ""); err != nil {
+				w.fail("conditional-get", key, "HEAD %s: %v", cond, err)
+			}
+			return
+		}
+		if err != nil {
+			w.fail("conditional-get", key, "HEAD %s: %v", cond, err)
+		} else if aws.ToString(out.ETag) != c.etag {
+			w.fail("conditional-get", key, "HEAD %s: ETag %s, want %s", cond, aws.ToString(out.ETag), c.etag)
+		}
+		return
+	}
+
+	// The conditions are evaluated before the range
+	start, n := int64(0), c.size
+	if c.size > 0 && w.rng.IntN(2) == 0 {
+		start = w.rng.Int64N(c.size)
+		n = 1 + w.rng.Int64N(c.size-start)
+		in.Range = aws.String(fmt.Sprintf("bytes=%d-%d", start, start+n-1))
+	}
+	out, err := w.s.client.GetObject(ctx, in)
+	if want != http.StatusOK {
+		code := "PreconditionFailed"
+		if want == http.StatusNotModified {
+			code = ""
+		}
+		if err := expectError(err, want, code); err != nil {
+			w.fail("conditional-get", key, "%s: %v", cond, err)
+		}
+		if out != nil {
+			_ = out.Body.Close()
+		}
+		return
+	}
+	if err != nil {
+		w.fail("conditional-get", key, "%s: %v", cond, err)
+		return
+	}
+	defer func() { _ = out.Body.Close() }()
+	if err := c.verifyRange(out.Body, start, n); err != nil {
+		w.fail("conditional-get", key, "%s: %v", cond, err)
+	}
+	w.s.stats.received.Add(n)
 }
 
 func (w *worker) conditionalPut(ctx context.Context) {
@@ -388,14 +541,19 @@ func (w *worker) conditionalPut(ctx context.Context) {
 	var cond string
 	var mutate func(*s3.PutObjectInput)
 	wantStatus, wantCode := http.StatusOK, ""
-	switch w.rng.IntN(3) {
-	case 0:
+	switch w.rng.IntN(7) {
+	case 6:
+		// S3 does not support writes conditional on another ETag
+		cond = "If-None-Match: ETag"
+		mutate = func(in *s3.PutObjectInput) { in.IfNoneMatch = aws.String(`"sha256-other"`) }
+		wantStatus, wantCode = http.StatusNotImplemented, "NotImplemented"
+	case 0, 1:
 		cond = "If-None-Match: *"
 		mutate = func(in *s3.PutObjectInput) { in.IfNoneMatch = aws.String("*") }
 		if current != nil {
 			wantStatus, wantCode = http.StatusPreconditionFailed, "PreconditionFailed"
 		}
-	case 1:
+	case 2, 3:
 		cond = "If-Match: current"
 		etag := `"sha256-none"`
 		if current != nil {
@@ -479,11 +637,25 @@ func (w *worker) copyObject(ctx context.Context) {
 		return
 	}
 	c := w.model[src]
-	out, err := w.s.client.CopyObject(ctx, &s3.CopyObjectInput{
+	in := &s3.CopyObjectInput{
 		Bucket:     &w.s.cfg.bucket,
 		Key:        &dst,
 		CopySource: aws.String(url.PathEscape(w.s.cfg.bucket + "/" + src)),
-	})
+	}
+	// The copy keeps the source's Content-Type and metadata, unless they
+	// are replaced
+	copied := *c
+	switch w.rng.IntN(3) {
+	case 0:
+		in.MetadataDirective = types.MetadataDirectiveReplace
+		if ct := w.setAttributes(&copied); ct != "" {
+			in.ContentType = &ct
+		}
+		in.Metadata = copied.metadata
+	case 1:
+		in.MetadataDirective = types.MetadataDirectiveCopy
+	}
+	out, err := w.s.client.CopyObject(ctx, in)
 	if err != nil {
 		w.fail("copy", dst, "from %s: %v", src, err)
 		w.resync(ctx, dst)
@@ -492,7 +664,6 @@ func (w *worker) copyObject(ctx context.Context) {
 	// A copy is stored as one part, so a copy of a multipart object has
 	// another ETag than its source, as in S3
 	w.wrote(c.size)
-	copied := *c
 	copied.etag = singleETag(c.bytes())
 	var etag string
 	if out.CopyObjectResult != nil {
@@ -504,64 +675,186 @@ func (w *worker) copyObject(ctx context.Context) {
 	w.model[dst] = &copied
 }
 
-// listKeys lists the keys under prefix, size and ETag by key, in pages of
-// pageSize, and checks that they come in order
-func (s *soak) listKeys(ctx context.Context, prefix string, pageSize int32) (map[string]types.Object, error) {
-	found := map[string]types.Object{}
+// listing is what a listing returned over all its pages
+type listing struct {
+	objects  map[string]types.Object
+	prefixes map[string]bool
+}
+
+// listAll lists prefix in pages of pageSize, with ListObjectsV2 or, if v1,
+// ListObjects. It checks that every page lists its keys and common
+// prefixes in order, after those of the pages before, and none twice.
+func (s *soak) listAll(ctx context.Context, v1 bool, prefix, delimiter, startAfter string, pageSize int32) (*listing, error) {
+	l := &listing{objects: map[string]types.Object{}, prefixes: map[string]bool{}}
+	// last is the greatest key or common prefix of the pages so far
+	var last, marker string
 	var token *string
-	last := ""
-	for {
-		out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-			Bucket:            &s.cfg.bucket,
-			Prefix:            &prefix,
-			MaxKeys:           aws.Int32(pageSize),
-			ContinuationToken: token,
-		})
-		if err != nil {
-			return nil, err
+	for page := 0; ; page++ {
+		if page > 100000 {
+			return nil, errors.New("listing does not end")
 		}
-		for _, o := range out.Contents {
-			key := aws.ToString(o.Key)
-			if key <= last {
-				return nil, fmt.Errorf("key %q listed after %q", key, last)
+		var contents []types.Object
+		var prefixes []types.CommonPrefix
+		var truncated bool
+		if v1 {
+			if page == 0 {
+				marker = startAfter
 			}
-			last = key
-			found[key] = o
+			out, err := s.client.ListObjects(ctx, &s3.ListObjectsInput{
+				Bucket: &s.cfg.bucket, Prefix: &prefix, Delimiter: optional(delimiter),
+				Marker: optional(marker), MaxKeys: aws.Int32(pageSize),
+			})
+			if err != nil {
+				return nil, err
+			}
+			contents, prefixes, truncated = out.Contents, out.CommonPrefixes, aws.ToBool(out.IsTruncated)
+			// Without a delimiter there is no NextMarker: the next page
+			// starts after the last key
+			marker = aws.ToString(out.NextMarker)
+			if marker == "" && delimiter == "" && len(contents) > 0 {
+				marker = aws.ToString(contents[len(contents)-1].Key)
+			}
+			if truncated && marker == "" {
+				return nil, errors.New("truncated listing without a marker to continue from")
+			}
+		} else {
+			in := &s3.ListObjectsV2Input{
+				Bucket: &s.cfg.bucket, Prefix: &prefix, Delimiter: optional(delimiter),
+				MaxKeys: aws.Int32(pageSize), ContinuationToken: token,
+			}
+			if page == 0 {
+				in.StartAfter = optional(startAfter)
+			}
+			out, err := s.client.ListObjectsV2(ctx, in)
+			if err != nil {
+				return nil, err
+			}
+			contents, prefixes, truncated = out.Contents, out.CommonPrefixes, aws.ToBool(out.IsTruncated)
+			if n := len(contents) + len(prefixes); aws.ToInt32(out.KeyCount) != int32(n) {
+				return nil, fmt.Errorf("KeyCount %d, with %d keys and common prefixes", aws.ToInt32(out.KeyCount), n)
+			}
+			token = out.NextContinuationToken
+			if truncated && token == nil {
+				return nil, errors.New("truncated listing without a continuation token")
+			}
 		}
-		if !aws.ToBool(out.IsTruncated) {
-			return found, nil
+		if n := len(contents) + len(prefixes); n > int(pageSize) || (truncated && n == 0) {
+			return nil, fmt.Errorf("page of %d keys and common prefixes, max-keys %d, truncated %v", n, pageSize, truncated)
 		}
-		token = out.NextContinuationToken
+
+		pageLast := last
+		prev := last
+		for _, o := range contents {
+			key := aws.ToString(o.Key)
+			if key <= prev || key <= startAfter {
+				return nil, fmt.Errorf("key %q listed after %q", key, max(prev, startAfter))
+			}
+			prev = key
+			pageLast = max(pageLast, key)
+			l.objects[key] = o
+		}
+		prev = last
+		for _, cp := range prefixes {
+			p := aws.ToString(cp.Prefix)
+			if p <= prev || l.prefixes[p] {
+				return nil, fmt.Errorf("common prefix %q listed after %q", p, prev)
+			}
+			prev = p
+			pageLast = max(pageLast, p)
+			l.prefixes[p] = true
+		}
+		last = pageLast
+		if !truncated {
+			return l, nil
+		}
 	}
 }
 
-// compareListing checks a listing of the worker's prefix against its model
-func (w *worker) compareListing(op string, found map[string]types.Object) {
+func optional(v string) *string {
+	if v == "" {
+		return nil
+	}
+	return &v
+}
+
+// listKeys lists the keys under prefix, in pages of pageSize
+func (s *soak) listKeys(ctx context.Context, prefix string, pageSize int32) (map[string]types.Object, error) {
+	l, err := s.listAll(ctx, false, prefix, "", "", pageSize)
+	if err != nil {
+		return nil, err
+	}
+	return l.objects, nil
+}
+
+// expectListing returns the keys and common prefixes a listing of the
+// worker's keys must give
+func (w *worker) expectListing(prefix, delimiter, startAfter string) (map[string]*content, map[string]bool) {
+	objects, prefixes := map[string]*content{}, map[string]bool{}
 	for _, key := range w.keys {
 		c := w.model[key]
+		if c == nil || !strings.HasPrefix(key, prefix) || key <= startAfter {
+			continue
+		}
+		if delimiter != "" {
+			if i := strings.Index(key[len(prefix):], delimiter); i >= 0 {
+				prefixes[key[:len(prefix)+i+len(delimiter)]] = true
+				continue
+			}
+		}
+		objects[key] = c
+	}
+	return objects, prefixes
+}
+
+// compareListing checks a listing of the worker's keys against the model
+func (w *worker) compareListing(op string, want map[string]*content, found map[string]types.Object) {
+	for key, c := range want {
 		o, ok := found[key]
 		switch {
-		case c == nil && ok:
-			w.fail(op, key, "deleted key is listed")
-		case c != nil && !ok:
+		case !ok:
 			w.fail(op, key, "key is not listed")
-		case c != nil && (aws.ToString(o.ETag) != c.etag || aws.ToInt64(o.Size) != c.size):
+		case aws.ToString(o.ETag) != c.etag || aws.ToInt64(o.Size) != c.size:
 			w.fail(op, key, "listed with ETag %s size %d, want %s size %d", aws.ToString(o.ETag), aws.ToInt64(o.Size), c.etag, c.size)
 		}
-		delete(found, key)
 	}
 	for key := range found {
-		w.fail(op, key, "unknown key is listed")
+		if _, ok := want[key]; !ok {
+			w.fail(op, key, "key is listed, deleted or not under the prefix")
+		}
 	}
 }
 
+// listPrefixes are the prefixes, below the worker's, that list tries
+var listPrefixes = []string{"", "plain/", "plain/00", "deep/", "deep/a/b/", "with space/", "ünï"}
+
 func (w *worker) list(ctx context.Context) {
-	found, err := w.s.listKeys(ctx, w.prefix, 1+w.rng.Int32N(1000))
+	prefix := w.prefix + listPrefixes[w.rng.IntN(len(listPrefixes))]
+	delimiter, startAfter := "", ""
+	if w.rng.IntN(2) == 0 {
+		delimiter = "/"
+	}
+	if w.rng.IntN(3) == 0 {
+		if key := w.pickKey(); strings.HasPrefix(key, prefix) {
+			startAfter = key
+		}
+	}
+	pageSize := 1 + w.rng.Int32N(1000)
+	if w.rng.IntN(2) == 0 {
+		pageSize = 1 + w.rng.Int32N(10)
+	}
+	v1 := w.rng.IntN(3) == 0
+	desc := fmt.Sprintf("v1 %v, delimiter %q, start after %q, max-keys %d", v1, delimiter, startAfter, pageSize)
+
+	l, err := w.s.listAll(ctx, v1, prefix, delimiter, startAfter, pageSize)
 	if err != nil {
-		w.fail("list", w.prefix, "%v", err)
+		w.fail("list", prefix, "%s: %v", desc, err)
 		return
 	}
-	w.compareListing("list", found)
+	objects, prefixes := w.expectListing(prefix, delimiter, startAfter)
+	w.compareListing("list", objects, l.objects)
+	if !maps.Equal(l.prefixes, prefixes) {
+		w.fail("list", prefix, "%s: common prefixes %v, want %v", desc, slices.Sorted(maps.Keys(l.prefixes)), slices.Sorted(maps.Keys(prefixes)))
+	}
 }
 
 func (w *worker) multipart(ctx context.Context) {
@@ -581,7 +874,12 @@ func (w *worker) multipart(ctx context.Context) {
 	}
 
 	bucket := &w.s.cfg.bucket
-	created, err := w.s.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{Bucket: bucket, Key: &key})
+	in := &s3.CreateMultipartUploadInput{Bucket: bucket, Key: &key}
+	if ct := w.setAttributes(c); ct != "" {
+		in.ContentType = &ct
+	}
+	in.Metadata = c.metadata
+	created, err := w.s.client.CreateMultipartUpload(ctx, in)
 	if err != nil {
 		w.fail("multipart", key, "create: %v", err)
 		return
@@ -594,20 +892,32 @@ func (w *worker) multipart(ctx context.Context) {
 		}
 	}()
 
+	// Parts of plain keys are sometimes sent in aws-chunked encoding
+	chunked := strings.HasPrefix(key, w.prefix+"plain/") && w.rng.IntN(3) == 0
 	var completed []types.CompletedPart
 	for i, p := range parts {
 		n := int32(i + 1)
-		out, err := w.s.client.UploadPart(ctx, &s3.UploadPartInput{
-			Bucket: bucket, Key: &key, UploadId: uploadID, PartNumber: &n,
-			Body: bytes.NewReader(p), ContentLength: aws.Int64(int64(len(p))),
-		})
+		// A part uploaded again replaces the one before
+		if w.rng.IntN(10) == 0 {
+			other := w.newContent(key, int64(len(p))).bytes()
+			if _, err := w.uploadPart(ctx, key, aws.ToString(uploadID), n, other, chunked); err != nil {
+				w.fail("multipart", key, "upload part %d to be replaced: %v", n, err)
+				return
+			}
+		}
+		etag, err := w.uploadPart(ctx, key, aws.ToString(uploadID), n, p, chunked)
 		if err != nil {
 			w.fail("multipart", key, "upload part %d: %v", n, err)
 			return
 		}
-		w.s.stats.sent.Add(int64(len(p)))
-		w.wrote(int64(len(p)))
-		completed = append(completed, types.CompletedPart{PartNumber: &n, ETag: out.ETag})
+		completed = append(completed, types.CompletedPart{PartNumber: &n, ETag: &etag})
+	}
+
+	if w.rng.IntN(2) == 0 {
+		w.checkParts(ctx, key, uploadID, parts, completed)
+	}
+	if w.rng.IntN(2) == 0 {
+		w.checkUploads(ctx, key, aws.ToString(uploadID))
 	}
 
 	switch r := w.rng.IntN(100); {
@@ -626,6 +936,7 @@ func (w *worker) multipart(ctx context.Context) {
 		if err := expectError(err, http.StatusNotFound, "NoSuchUpload"); err != nil {
 			w.fail("multipart", key, "upload part after abort: %v", err)
 		}
+		w.checkUploadGone(ctx, key, uploadID)
 		return
 	case r < 35:
 		// A part with the wrong ETag must be refused, leaving the upload
@@ -662,13 +973,149 @@ func (w *worker) multipart(ctx context.Context) {
 		c.etag = aws.ToString(out.ETag)
 	}
 	w.model[key] = c
+	if w.rng.IntN(4) == 0 {
+		w.checkUploadGone(ctx, key, uploadID)
+	}
+}
+
+// uploadPart uploads a part, with the SDK or in aws-chunked encoding, and
+// returns its ETag
+func (w *worker) uploadPart(ctx context.Context, key, uploadID string, n int32, p []byte, chunked bool) (string, error) {
+	w.wrote(int64(len(p)))
+	w.s.stats.sent.Add(int64(len(p)))
+	if chunked {
+		mode := chunkModes[w.rng.IntN(len(chunkModes))]
+		resp, err := w.s.sendChunked(ctx, w.s.httpClient, chunkedUpload{
+			target:    fmt.Sprintf("/%s/%s?partNumber=%d&uploadId=%s", w.s.cfg.bucket, key, n, url.QueryEscape(uploadID)),
+			mode:      mode,
+			data:      p,
+			chunkSize: w.chunkSize(),
+		})
+		if err != nil {
+			return "", err
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("%s: status %d: %s", mode, resp.StatusCode, body)
+		}
+		return resp.Header.Get("ETag"), nil
+	}
+	in := &s3.UploadPartInput{
+		Bucket: &w.s.cfg.bucket, Key: &key, UploadId: &uploadID, PartNumber: &n,
+		Body: bytes.NewReader(p), ContentLength: aws.Int64(int64(len(p))),
+	}
+	if w.rng.IntN(2) == 0 {
+		in.ChecksumAlgorithm = types.ChecksumAlgorithmSha256
+	}
+	out, err := w.s.client.UploadPart(ctx, in)
+	if err != nil {
+		return "", err
+	}
+	return aws.ToString(out.ETag), nil
+}
+
+// checkParts lists the parts of an upload, in pages, and checks them
+// against the parts uploaded
+func (w *worker) checkParts(ctx context.Context, key string, uploadID *string, parts [][]byte, completed []types.CompletedPart) {
+	maxParts := 1 + w.rng.Int32N(int32(len(parts))+1)
+	var listed []types.Part
+	var marker *string
+	for range len(parts) + 2 {
+		out, err := w.s.client.ListParts(ctx, &s3.ListPartsInput{
+			Bucket: &w.s.cfg.bucket, Key: &key, UploadId: uploadID, MaxParts: &maxParts, PartNumberMarker: marker,
+		})
+		if err != nil {
+			w.fail("multipart", key, "list parts: %v", err)
+			return
+		}
+		if len(out.Parts) > int(maxParts) {
+			w.fail("multipart", key, "list parts: %d parts, max-parts %d", len(out.Parts), maxParts)
+		}
+		listed = append(listed, out.Parts...)
+		if !aws.ToBool(out.IsTruncated) {
+			break
+		}
+		marker = out.NextPartNumberMarker
+	}
+	if len(listed) != len(parts) {
+		w.fail("multipart", key, "list parts: %d parts, want %d", len(listed), len(parts))
+		return
+	}
+	for i, p := range listed {
+		sum := sha256.Sum256(parts[i])
+		switch {
+		case aws.ToInt32(p.PartNumber) != int32(i+1):
+			w.fail("multipart", key, "list parts: part %d listed as part %d", i+1, aws.ToInt32(p.PartNumber))
+		case aws.ToInt64(p.Size) != int64(len(parts[i])):
+			w.fail("multipart", key, "list parts: part %d of %d bytes, want %d", i+1, aws.ToInt64(p.Size), len(parts[i]))
+		case aws.ToString(p.ETag) != aws.ToString(completed[i].ETag):
+			w.fail("multipart", key, "list parts: part %d ETag %s, want %s", i+1, aws.ToString(p.ETag), aws.ToString(completed[i].ETag))
+		case aws.ToString(p.ChecksumSHA256) != base64.StdEncoding.EncodeToString(sum[:]):
+			w.fail("multipart", key, "list parts: part %d checksum %s", i+1, aws.ToString(p.ChecksumSHA256))
+		}
+	}
+}
+
+// checkUploads lists the uploads under the worker's prefix, which a worker
+// starts one at a time, so the upload in progress must be the only one
+func (w *worker) checkUploads(ctx context.Context, key, uploadID string) {
+	var uploads []types.MultipartUpload
+	var keyMarker, idMarker *string
+	for range 10 {
+		out, err := w.s.client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
+			Bucket: &w.s.cfg.bucket, Prefix: &w.prefix, MaxUploads: aws.Int32(1),
+			KeyMarker: keyMarker, UploadIdMarker: idMarker,
+		})
+		if err != nil {
+			w.fail("multipart", key, "list uploads: %v", err)
+			return
+		}
+		uploads = append(uploads, out.Uploads...)
+		if !aws.ToBool(out.IsTruncated) {
+			break
+		}
+		keyMarker, idMarker = out.NextKeyMarker, out.NextUploadIdMarker
+	}
+	if len(uploads) != 1 || aws.ToString(uploads[0].Key) != key || aws.ToString(uploads[0].UploadId) != uploadID {
+		var listed []string
+		for _, u := range uploads {
+			listed = append(listed, aws.ToString(u.Key)+" "+aws.ToString(u.UploadId))
+		}
+		w.fail("multipart", key, "list uploads: %q, want only upload %s", listed, uploadID)
+	}
+}
+
+// checkUploadGone checks that an upload completed or aborted is gone
+func (w *worker) checkUploadGone(ctx context.Context, key string, uploadID *string) {
+	_, err := w.s.client.ListParts(ctx, &s3.ListPartsInput{Bucket: &w.s.cfg.bucket, Key: &key, UploadId: uploadID})
+	if err := expectError(err, http.StatusNotFound, "NoSuchUpload"); err != nil {
+		w.fail("multipart", key, "list parts of an upload that is gone: %v", err)
+	}
+	out, err := w.s.client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{Bucket: &w.s.cfg.bucket, Prefix: &key})
+	if err != nil {
+		w.fail("multipart", key, "list uploads: %v", err)
+		return
+	}
+	for _, u := range out.Uploads {
+		if aws.ToString(u.UploadId) == aws.ToString(uploadID) {
+			w.fail("multipart", key, "upload %s is listed after it is gone", aws.ToString(uploadID))
+		}
+	}
 }
 
 func (w *worker) presignedGet(ctx context.Context) {
 	key := w.pickKey()
 	c := w.model[key]
-	req, err := w.s.presign.PresignGetObject(ctx, &s3.GetObjectInput{Bucket: &w.s.cfg.bucket, Key: &key},
-		s3.WithPresignExpires(time.Minute))
+	in := &s3.GetObjectInput{Bucket: &w.s.cfg.bucket, Key: &key}
+	// A presigned GET may override response headers
+	override := w.rng.IntN(2) == 0
+	if override {
+		in.ResponseContentType = aws.String("text/x-soak")
+		in.ResponseContentDisposition = aws.String(`attachment; filename="soak.bin"`)
+		in.ResponseCacheControl = aws.String("no-store")
+	}
+	req, err := w.s.presign.PresignGetObject(ctx, in, s3.WithPresignExpires(time.Minute))
 	if err != nil {
 		w.fail("presigned-get", key, "presign: %v", err)
 		return
@@ -690,9 +1137,57 @@ func (w *worker) presignedGet(ctx context.Context) {
 		w.fail("presigned-get", key, "status %d", resp.StatusCode)
 		return
 	}
+	wantType := c.contentType
+	if override {
+		wantType = "text/x-soak"
+		if got := resp.Header.Get("Content-Disposition"); got != aws.ToString(in.ResponseContentDisposition) {
+			w.fail("presigned-get", key, "Content-Disposition %q, want %q", got, aws.ToString(in.ResponseContentDisposition))
+		}
+		if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+			w.fail("presigned-get", key, "Cache-Control %q, want no-store", got)
+		}
+	}
+	if got := resp.Header.Get("Content-Type"); got != wantType {
+		w.fail("presigned-get", key, "Content-Type %q, want %q", got, wantType)
+	}
 	if err := c.verifyRange(resp.Body, 0, c.size); err != nil {
 		w.fail("presigned-get", key, "%v", err)
 	}
+}
+
+// presignedPut uploads an object with a presigned URL
+func (w *worker) presignedPut(ctx context.Context) {
+	key := w.pickKey()
+	c := w.newContent(key, w.size())
+	req, err := w.s.presign.PresignPutObject(ctx, &s3.PutObjectInput{Bucket: &w.s.cfg.bucket, Key: &key},
+		s3.WithPresignExpires(time.Minute))
+	if err != nil {
+		w.fail("presigned-put", key, "presign: %v", err)
+		return
+	}
+	data := c.bytes()
+	hreq, _ := http.NewRequestWithContext(ctx, req.Method, req.URL, bytes.NewReader(data))
+	hreq.ContentLength = c.size
+	w.wrote(c.size)
+	resp, err := w.s.httpClient.Do(hreq)
+	if err != nil {
+		w.fail("presigned-put", key, "%v", err)
+		w.resync(ctx, key)
+		return
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		w.fail("presigned-put", key, "status %d: %s", resp.StatusCode, body)
+		w.resync(ctx, key)
+		return
+	}
+	w.s.stats.sent.Add(c.size)
+	c.etag = singleETag(data)
+	if got := resp.Header.Get("ETag"); got != c.etag {
+		w.fail("presigned-put", key, "ETag %s, want %s", got, c.etag)
+	}
+	w.model[key] = c
 }
 
 // rawPut sends a signed PUT of size bytes with the given payload hash and
@@ -868,5 +1363,6 @@ func (w *worker) sweep() {
 		w.fail("sweep", w.prefix, "list: %v", err)
 		return
 	}
-	w.compareListing("sweep", found)
+	want, _ := w.expectListing(w.prefix, "", "")
+	w.compareListing("sweep", want, found)
 }
