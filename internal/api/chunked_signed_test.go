@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -456,16 +457,32 @@ func FuzzSignedAWSChunkedReader(f *testing.F) {
 	f.Add(bytes.Repeat([]byte("0123456789abcdef"), 64), uint16(256), uint32(12345))
 	f.Add(bytes.Repeat([]byte{0xff}, 33), uint16(10), uint32(999999))
 
+	// VerifyRequest checks the signing time against the clock on every
+	// iteration, and a fuzz worker can run for longer than
+	// auth.MaxClockSkew, so sign again well before the signature gets that
+	// old
+	var mu sync.Mutex
 	plain := newStreamSigning(f, auth.StreamingPayload)
 	withTrailer := newStreamSigning(f, auth.StreamingPayloadTrailer)
+	signing := func(t *testing.T, trailer bool) *streamSigning {
+		mu.Lock()
+		defer mu.Unlock()
+		if time.Since(plain.time) > auth.MaxClockSkew/3 {
+			plain = newStreamSigning(t, auth.StreamingPayload)
+			withTrailer = newStreamSigning(t, auth.StreamingPayloadTrailer)
+		}
+		if trailer {
+			return withTrailer
+		}
+		return plain
+	}
 
 	f.Fuzz(func(t *testing.T, data []byte, chunkSize uint16, flip uint32) {
 		size := max(1, int(chunkSize))
 		trailer := len(data)%2 == 1
-		s := plain
+		s := signing(t, trailer)
 		var trailers []string
 		if trailer {
-			s = withTrailer
 			trailers = []string{checksumTrailer(data)}
 		}
 		stream := s.signChunks(splitChunks(data, size), trailers...).bytes()
