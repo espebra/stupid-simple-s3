@@ -129,9 +129,20 @@ type Ordered interface {
 	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~float32 | ~float64 | ~string
 }
 
-// Less[T] returns a default LessFunc that uses the '<' operator for types that support it.
+// Less[T] returns a default LessFunc that uses the '<' operator for types that
+// support it.
+//
+// For floating-point types, NaN is ordered before every other value and all
+// NaNs are treated as equal (as cmp.Less does), so that the ordering is a strict
+// weak ordering and a tree may hold at most one NaN.  The plain '<' operator is
+// not: NaN compares neither less than nor greater than anything, so it would
+// appear equal to every item and corrupt the tree.
 func Less[T Ordered]() LessFunc[T] {
-	return func(a, b T) bool { return a < b }
+	return func(a, b T) bool {
+		// Equivalent to cmp.Less(a, b), with the common case first.  For
+		// non-float types a != a is always false and compiles away.
+		return a < b || (a != a && b == b)
+	}
 }
 
 // NewOrderedG creates a new B-Tree for ordered types.
@@ -675,6 +686,10 @@ func (n *node[T]) print(w io.Writer, level int) {
 // BTreeG stores items of type T in an ordered structure, allowing easy insertion,
 // removal, and iteration.
 //
+// Create trees with NewG, NewOrderedG or NewWithFreeListG.  The zero value has
+// no LessFunc: it reads as an empty tree, but inserting into it or cloning it
+// panics.
+//
 // Write operations are not safe for concurrent mutation by multiple
 // goroutines, but Read operations are.
 type BTreeG[T any] struct {
@@ -726,6 +741,7 @@ type copyOnWriteContext[T any] struct {
 // copies due to the aforementioned copy-on-write logic, but should converge to
 // the original performance characteristics of the original tree.
 func (t *BTreeG[T]) Clone() (t2 *BTreeG[T]) {
+	t.mustBeInitialised()
 	// Create two entirely new copy-on-write contexts.
 	// This operation effectively creates three trees:
 	//   the original, shared nodes (old b.cow)
@@ -739,6 +755,14 @@ func (t *BTreeG[T]) Clone() (t2 *BTreeG[T]) {
 	t.cow = &cows[0]
 	t2.cow = &cows[1]
 	return t2
+}
+
+// mustBeInitialised panics with a clear message if t is a zero-value BTreeG,
+// which has no LessFunc and so cannot hold items.
+func (t *BTreeG[T]) mustBeInitialised() {
+	if t.cow == nil {
+		panic("btree: use of uninitialised BTreeG; create trees with NewG, NewOrderedG or NewWithFreeListG")
+	}
 }
 
 // maxItems returns the max number of items to allow per node.
@@ -790,6 +814,7 @@ func (c *copyOnWriteContext[T]) freeNode(n *node[T]) freeType {
 // and the second return value is true.  Otherwise, (zeroValue, false)
 func (t *BTreeG[T]) ReplaceOrInsert(item T) (_ T, _ bool) {
 	if t.root == nil {
+		t.mustBeInitialised()
 		t.root = t.cow.newNode()
 		t.root.items = append(t.root.items, item)
 		t.length++
@@ -1111,6 +1136,9 @@ func (t *BTree) Has(key Item) bool {
 //
 // nil cannot be added to the tree (will panic).
 func (t *BTree) ReplaceOrInsert(item Item) Item {
+	if item == nil {
+		panic("btree: nil Item cannot be added to the tree")
+	}
 	i, _ := (*BTreeG[Item])(t).ReplaceOrInsert(item)
 	return i
 }
