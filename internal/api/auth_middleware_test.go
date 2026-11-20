@@ -90,6 +90,7 @@ type authMWCase struct {
 	wantStatus int
 	wantCode   s3.ErrorCode // empty means the request must be accepted
 	wantReason string       // metrics.AuthReason* label incremented on rejection
+	wantMsg    string       // the error message, if set
 }
 
 func runAuthMWCases(t *testing.T, cases []authMWCase) {
@@ -148,6 +149,9 @@ func runAuthMWCases(t *testing.T, cases []authMWCase) {
 				}
 				if body.Code != tc.wantCode {
 					t.Errorf("error code = %q, want %q", body.Code, tc.wantCode)
+				}
+				if tc.wantMsg != "" && body.Message != tc.wantMsg {
+					t.Errorf("error message = %q, want %q", body.Message, tc.wantMsg)
 				}
 			})
 		}
@@ -242,22 +246,59 @@ func TestAuthMiddlewarePresignedAuth(t *testing.T) {
 				return authMWWithQueryParam(req, "X-Amz-Credential", cred)
 			},
 			wantStatus: http.StatusBadRequest,
-			wantCode:   s3.ErrAuthorizationHeaderMalformed,
+			wantCode:   s3.ErrAuthorizationQueryParametersError,
 			wantReason: metrics.AuthReasonMalformedHeader,
 		},
 		{
-			// GetPresignedAccessKeyID only takes the part before the first
-			// slash, so a credential without a scope but with a known key
-			// passes the malformed check and fails in ParsePresignedURL,
-			// which the middleware reports as SignatureDoesNotMatch.
 			name: "credential without scope",
 			req: func(t *testing.T) *http.Request {
 				req := authMWPresignedRequest(t, authMWAccessKey, authMWSecretKey, now, time.Hour)
 				return authMWWithQueryParam(req, "X-Amz-Credential", authMWAccessKey)
 			},
-			wantStatus: http.StatusForbidden,
-			wantCode:   s3.ErrSignatureDoesNotMatch,
-			wantReason: metrics.AuthReasonSignatureMismatch,
+			wantStatus: http.StatusBadRequest,
+			wantCode:   s3.ErrAuthorizationQueryParametersError,
+			wantReason: metrics.AuthReasonMalformedHeader,
+		},
+		{
+			// The query parameters are checked before the access key
+			name: "credential without scope and unknown access key",
+			req: func(t *testing.T) *http.Request {
+				req := authMWPresignedRequest(t, authMWAccessKey, authMWSecretKey, now, time.Hour)
+				return authMWWithQueryParam(req, "X-Amz-Credential", "AKIAUNKNOWN")
+			},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   s3.ErrAuthorizationQueryParametersError,
+			wantReason: metrics.AuthReasonMalformedHeader,
+		},
+		{
+			name: "expires over a week",
+			req: func(t *testing.T) *http.Request {
+				req := authMWPresignedRequest(t, authMWAccessKey, authMWSecretKey, now, time.Hour)
+				return authMWWithQueryParam(req, "X-Amz-Expires", "604801")
+			},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   s3.ErrAuthorizationQueryParametersError,
+			wantReason: metrics.AuthReasonMalformedHeader,
+		},
+		{
+			name: "missing X-Amz-Date",
+			req: func(t *testing.T) *http.Request {
+				req := authMWPresignedRequest(t, authMWAccessKey, authMWSecretKey, now, time.Hour)
+				return authMWWithQueryParam(req, "X-Amz-Date", "")
+			},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   s3.ErrAuthorizationQueryParametersError,
+			wantReason: metrics.AuthReasonMalformedHeader,
+		},
+		{
+			name: "malformed X-Amz-Date",
+			req: func(t *testing.T) *http.Request {
+				req := authMWPresignedRequest(t, authMWAccessKey, authMWSecretKey, now, time.Hour)
+				return authMWWithQueryParam(req, "X-Amz-Date", "yesterday")
+			},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   s3.ErrAuthorizationQueryParametersError,
+			wantReason: metrics.AuthReasonMalformedHeader,
 		},
 		{
 			name: "unknown access key",
@@ -274,7 +315,8 @@ func TestAuthMiddlewarePresignedAuth(t *testing.T) {
 				return authMWPresignedRequest(t, authMWAccessKey, authMWSecretKey, now.Add(-2*time.Hour), time.Minute)
 			},
 			wantStatus: http.StatusForbidden,
-			wantCode:   s3.ErrExpiredToken,
+			wantCode:   s3.ErrAccessDenied,
+			wantMsg:    "Request has expired",
 			wantReason: metrics.AuthReasonTimeSkew,
 		},
 		{
@@ -283,7 +325,8 @@ func TestAuthMiddlewarePresignedAuth(t *testing.T) {
 				return authMWPresignedRequest(t, authMWAccessKey, authMWSecretKey, now.Add(auth.MaxClockSkew+5*time.Minute), time.Hour)
 			},
 			wantStatus: http.StatusForbidden,
-			wantCode:   s3.ErrRequestTimeTooSkewed,
+			wantCode:   s3.ErrAccessDenied,
+			wantMsg:    "Request is not valid yet",
 			wantReason: metrics.AuthReasonTimeSkew,
 		},
 		{

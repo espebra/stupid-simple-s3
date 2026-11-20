@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -361,41 +362,82 @@ func TestCopyObjectValidation(t *testing.T) {
 
 func TestParseMaxKeys(t *testing.T) {
 	tests := []struct {
-		raw  string
-		set  bool
-		want int
+		raw    string
+		set    bool
+		want   int
+		wantOK bool
 	}{
-		{"", false, 1000},
-		{"", true, 1000},
-		{"1", true, 1},
-		{"5", true, 5},
-		{"+5", true, 5},
-		{"999", true, 999},
-		{"1000", true, 1000},
-		{"1001", true, 1000},
-		{"2147483648", true, 1000},
-		{"9223372036854775807", true, 1000},
-		// Values that are not a positive integer fall back to the default.
-		// S3 itself returns no keys for max-keys=0 and rejects the others
-		// with InvalidArgument.
-		{"0", true, 1000},
-		{"-1", true, 1000},
-		{"-9223372036854775808", true, 1000},
-		{"9223372036854775808", true, 1000},     // overflow
-		{"99999999999999999999999", true, 1000}, // overflow
-		{"abc", true, 1000},
-		{"10abc", true, 1000},
-		{" 5", true, 1000},
-		{"5.0", true, 1000},
-		{"0x10", true, 1000},
+		{"", false, 1000, true},
+		{"", true, 1000, true},
+		{"0", true, 0, true},
+		{"1", true, 1, true},
+		{"5", true, 5, true},
+		{"+5", true, 5, true},
+		{"999", true, 999, true},
+		{"1000", true, 1000, true},
+		{"1001", true, 1000, true},
+		{"2147483647", true, 1000, true},
+		// Like S3, values that are not an integer from 0 to the largest
+		// int32 are rejected
+		{"2147483648", true, 0, false},
+		{"9223372036854775807", true, 0, false},
+		{"99999999999999999999999", true, 0, false},
+		{"-1", true, 0, false},
+		{"-9223372036854775808", true, 0, false},
+		{"abc", true, 0, false},
+		{"10abc", true, 0, false},
+		{" 5", true, 0, false},
+		{"5.0", true, 0, false},
+		{"0x10", true, 0, false},
 	}
 	for _, tt := range tests {
 		q := url.Values{}
 		if tt.set {
 			q.Set("max-keys", tt.raw)
 		}
-		if got := parseMaxKeys(q); got != tt.want {
-			t.Errorf("parseMaxKeys(%q) = %d, want %d", tt.raw, got, tt.want)
+		got, ok := parseMaxKeys(q)
+		if got != tt.want || ok != tt.wantOK {
+			t.Errorf("parseMaxKeys(%q) = %d, %v, want %d, %v", tt.raw, got, ok, tt.want, tt.wantOK)
+		}
+	}
+}
+
+// TestListObjectsMaxKeys tests that both listing versions reject an invalid
+// max-keys with InvalidArgument and list nothing for max-keys=0, as S3 does
+func TestListObjectsMaxKeys(t *testing.T) {
+	handlers, store, cleanup := setupTestHandlers(t)
+	defer cleanup()
+	vtPut(t, store, "test-bucket", "a.txt", "text/plain", nil, []byte("a"))
+
+	for _, listType := range []string{"", "list-type=2&"} {
+		for _, bad := range []string{"-1", "abc", "2147483648"} {
+			req := httptest.NewRequest("GET", "/test-bucket?"+listType+"max-keys="+bad, nil)
+			req.SetPathValue("bucket", "test-bucket")
+			w := httptest.NewRecorder()
+			handlers.GetBucket(w, req)
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "<Code>InvalidArgument</Code>") {
+				t.Errorf("%smax-keys=%s: status %d, body %s, want 400 InvalidArgument", listType, bad, w.Code, w.Body.String())
+			}
+		}
+
+		req := httptest.NewRequest("GET", "/test-bucket?"+listType+"max-keys=0", nil)
+		req.SetPathValue("bucket", "test-bucket")
+		w := httptest.NewRecorder()
+		handlers.GetBucket(w, req)
+		body := w.Body.String()
+		if w.Code != http.StatusOK {
+			t.Fatalf("%smax-keys=0: status %d, body %s", listType, w.Code, body)
+		}
+		if strings.Contains(body, "<Contents>") || !strings.Contains(body, "<MaxKeys>0</MaxKeys>") || !strings.Contains(body, "<IsTruncated>false</IsTruncated>") {
+			t.Errorf("%smax-keys=0: body %s, want no keys, MaxKeys 0 and IsTruncated false", listType, body)
+		}
+
+		req = httptest.NewRequest("GET", "/missing-bucket?"+listType+"max-keys=0", nil)
+		req.SetPathValue("bucket", "missing-bucket")
+		w = httptest.NewRecorder()
+		handlers.GetBucket(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("%smax-keys=0 on a missing bucket: status %d, want 404", listType, w.Code)
 		}
 	}
 }
@@ -644,7 +686,6 @@ func TestListObjectsV1(t *testing.T) {
 		{"max-keys equal to count", "max-keys=5", keys, []string{}, false, "", 5},
 		{"max-keys with delimiter gives NextMarker", "delimiter=%2F&max-keys=2", []string{"a.txt"}, []string{"b/"}, true, "b/", 2},
 		{"marker at common prefix skips its keys", "delimiter=%2F&marker=b%2F", []string{"d.txt"}, []string{"c/"}, false, "", 1000},
-		{"invalid max-keys uses default", "max-keys=-3", keys, []string{}, false, "", 1000},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

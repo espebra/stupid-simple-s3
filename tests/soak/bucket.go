@@ -176,7 +176,7 @@ func (w *worker) authChecks(ctx context.Context) {
 		}
 		get, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		resp, err := w.s.httpClient.Do(get)
-		w.expectRefused("expired presigned get", key, resp, err, http.StatusForbidden, "ExpiredToken")
+		w.expectRefused("expired presigned get", key, resp, err, http.StatusForbidden, "AccessDenied")
 	case 4:
 		w.verifyKeyWith(ctx, w.s.roClient, "auth", key)
 	case 5:

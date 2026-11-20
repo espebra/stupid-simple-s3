@@ -1290,19 +1290,35 @@ func (h *Handlers) ListMultipartUploads(w http.ResponseWriter, r *http.Request) 
 }
 
 // parseMaxKeys returns the max-keys of a listing request, capped at
-// maxKeysLimit
-func parseMaxKeys(query url.Values) int {
-	maxKeys := maxKeysLimit
-	if maxKeysStr := query.Get("max-keys"); maxKeysStr != "" {
-		if mk, err := strconv.Atoi(maxKeysStr); err == nil && mk > 0 {
-			maxKeys = mk
-			// Cap max-keys immediately to prevent resource exhaustion
-			if maxKeys > maxKeysLimit {
-				maxKeys = maxKeysLimit
-			}
-		}
+// maxKeysLimit. Like S3, it rejects a value that is not an integer from 0 to
+// the largest int32, and returns false.
+func parseMaxKeys(query url.Values) (int, bool) {
+	maxKeysStr := query.Get("max-keys")
+	if maxKeysStr == "" {
+		return maxKeysLimit, true
 	}
-	return maxKeys
+	mk, err := strconv.ParseInt(maxKeysStr, 10, 32)
+	if err != nil || mk < 0 {
+		return 0, false
+	}
+	// Cap max-keys immediately to prevent resource exhaustion
+	return min(int(mk), maxKeysLimit), true
+}
+
+// writeInvalidMaxKeys writes the error response for a max-keys value that
+// parseMaxKeys rejected
+func writeInvalidMaxKeys(w http.ResponseWriter) {
+	s3.WriteErrorResponseMessage(w, s3.ErrInvalidArgument, "Provided max-keys not an integer or within integer range")
+}
+
+// listObjects lists a bucket for ListObjectsV1 and ListObjectsV2. With
+// max-keys 0 it lists nothing, as S3 does, where storage would use its
+// default.
+func (h *Handlers) listObjects(bucket string, opts storage.ListObjectsOptions) (*storage.ListObjectsResult, error) {
+	if opts.MaxKeys == 0 {
+		return &storage.ListObjectsResult{}, nil
+	}
+	return h.storage.ListObjects(bucket, opts)
 }
 
 // listObjectsContents converts listed objects and common prefixes to the
@@ -1331,7 +1347,11 @@ func listObjectsContents(result *storage.ListObjectsResult) ([]s3.Object, []s3.P
 func (h *Handlers) ListObjectsV1(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 	query := r.URL.Query()
-	maxKeys := parseMaxKeys(query)
+	maxKeys, ok := parseMaxKeys(query)
+	if !ok {
+		writeInvalidMaxKeys(w)
+		return
+	}
 
 	opts := storage.ListObjectsOptions{
 		Prefix:    query.Get("prefix"),
@@ -1340,7 +1360,7 @@ func (h *Handlers) ListObjectsV1(w http.ResponseWriter, r *http.Request) {
 		Marker:    query.Get("marker"),
 	}
 
-	result, err := h.storage.ListObjects(bucket, opts)
+	result, err := h.listObjects(bucket, opts)
 	if err != nil {
 		slog.Error("failed to list objects", "error", err, "bucket", bucket, "prefix", opts.Prefix, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)
@@ -1374,7 +1394,11 @@ func (h *Handlers) ListObjectsV1(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) ListObjectsV2(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 	query := r.URL.Query()
-	maxKeys := parseMaxKeys(query)
+	maxKeys, ok := parseMaxKeys(query)
+	if !ok {
+		writeInvalidMaxKeys(w)
+		return
+	}
 
 	opts := storage.ListObjectsOptions{
 		Prefix:            query.Get("prefix"),
@@ -1384,7 +1408,7 @@ func (h *Handlers) ListObjectsV2(w http.ResponseWriter, r *http.Request) {
 		ContinuationToken: query.Get("continuation-token"),
 	}
 
-	result, err := h.storage.ListObjects(bucket, opts)
+	result, err := h.listObjects(bucket, opts)
 	if err != nil {
 		slog.Error("failed to list objects", "error", err, "bucket", bucket, "prefix", opts.Prefix, "request_id", GetRequestID(r))
 		s3.WriteErrorResponse(w, s3.ErrInternalError)

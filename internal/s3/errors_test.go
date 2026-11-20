@@ -52,7 +52,7 @@ func TestErrorStatusCode(t *testing.T) {
 		{ErrSignatureDoesNotMatch, http.StatusForbidden},
 		{ErrRequestTimeTooSkewed, http.StatusForbidden},
 		{ErrInvalidAccessKeyId, http.StatusForbidden},
-		{ErrExpiredToken, http.StatusForbidden},
+		{ErrAuthorizationQueryParametersError, http.StatusBadRequest},
 	}
 
 	for _, tt := range tests {
@@ -132,7 +132,7 @@ func TestAllErrorCodesHaveStatusCodes(t *testing.T) {
 		ErrEntityTooSmall,
 		ErrIncompleteBody,
 		ErrAuthorizationHeaderMalformed,
-		ErrExpiredToken,
+		ErrAuthorizationQueryParametersError,
 		ErrXAmzContentSHA256Mismatch,
 		ErrPreconditionFailed,
 		ErrNotImplemented,
@@ -172,7 +172,7 @@ func TestAllErrorCodesHaveMessages(t *testing.T) {
 		ErrEntityTooSmall,
 		ErrIncompleteBody,
 		ErrAuthorizationHeaderMalformed,
-		ErrExpiredToken,
+		ErrAuthorizationQueryParametersError,
 		ErrXAmzContentSHA256Mismatch,
 		ErrPreconditionFailed,
 		ErrNotImplemented,
