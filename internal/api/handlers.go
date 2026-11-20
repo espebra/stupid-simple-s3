@@ -42,9 +42,12 @@ func drainRequestBody(r *http.Request) {
 
 // payloadErrorCode returns the S3 error code for a request body that failed
 // signature verification: a body that does not match its signed
-// X-Amz-Content-Sha256, or an aws-chunked chunk with a wrong signature.
+// X-Amz-Content-Sha256, or an aws-chunked chunk with a wrong signature. It
+// also covers an aws-chunked body that does not follow the encoding.
 func payloadErrorCode(err error) (s3.ErrorCode, bool) {
 	switch {
+	case errors.Is(err, errMalformedChunk):
+		return s3.ErrInvalidRequest, true
 	case errors.Is(err, auth.ErrContentSHA256Mismatch):
 		return s3.ErrXAmzContentSHA256Mismatch, true
 	case errors.Is(err, auth.ErrChunkSignatureMismatch):
