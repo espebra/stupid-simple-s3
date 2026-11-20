@@ -312,11 +312,13 @@ func isMetricsEndpoint(path string) bool {
 // getClientIP extracts the client IP from the request
 // This version does NOT trust proxy headers - use getClientIPWithTrust for that
 func getClientIP(r *http.Request) string {
-	addr := r.RemoteAddr
-	if idx := strings.LastIndex(addr, ":"); idx != -1 {
-		return addr[:idx]
+	// net.SplitHostPort also removes the brackets around an IPv6 address,
+	// which isTrusted needs to parse it
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
 	}
-	return addr
+	return host
 }
 
 // getClientIPWithTrust extracts the client IP, trusting proxy headers only from trusted sources
