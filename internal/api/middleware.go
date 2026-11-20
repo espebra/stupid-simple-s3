@@ -312,11 +312,13 @@ func isMetricsEndpoint(path string) bool {
 // getClientIP extracts the client IP from the request
 // This version does NOT trust proxy headers - use getClientIPWithTrust for that
 func getClientIP(r *http.Request) string {
-	addr := r.RemoteAddr
-	if idx := strings.LastIndex(addr, ":"); idx != -1 {
-		return addr[:idx]
+	// net.SplitHostPort also removes the brackets around an IPv6 address,
+	// which isTrusted needs to parse it
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
 	}
-	return addr
+	return host
 }
 
 // getClientIPWithTrust extracts the client IP, trusting proxy headers only from trusted sources
@@ -552,20 +554,23 @@ func AuthMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 func handlePresignedAuth(w http.ResponseWriter, r *http.Request, cfg *config.Config, sigv4 *auth.SignatureV4, proxyChecker *trustedProxyChecker, next http.Handler) {
 	clientIP := getClientIPWithTrust(r, proxyChecker)
 
-	// Get access key ID from presigned URL
-	accessKeyID := auth.GetPresignedAccessKeyID(r)
-	if accessKeyID == "" {
+	// Check the query parameters before looking up the access key, as S3
+	// does, so that a malformed presigned URL is reported as such
+	parsed, err := sigv4.ParsePresignedURL(r)
+	if err != nil {
 		time.Sleep(authFailureDelay)
 		metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonMalformedHeader).Inc()
-		slog.Debug("auth failure: malformed presigned URL credential",
+		slog.Debug("auth failure: malformed presigned URL",
 			"client_ip", clientIP,
 			"request_id", GetRequestID(r),
 			"method", r.Method,
 			"path", r.URL.Path,
+			"error", err,
 		)
-		s3.WriteErrorResponse(w, s3.ErrAuthorizationHeaderMalformed)
+		s3.WriteErrorResponse(w, s3.ErrAuthorizationQueryParametersError)
 		return
 	}
+	accessKeyID := parsed.AccessKeyID
 
 	// Look up credential
 	cred := cfg.GetCredential(accessKeyID)
@@ -584,11 +589,11 @@ func handlePresignedAuth(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	}
 
 	// Verify presigned URL signature
-	_, err := sigv4.VerifyPresignedRequest(r, cred.SecretAccessKey)
+	_, err = sigv4.VerifyPresignedRequest(r, cred.SecretAccessKey)
 	if err != nil {
 		time.Sleep(authFailureDelay)
 		// Check for specific error types
-		if strings.Contains(err.Error(), "expired") {
+		if errors.Is(err, auth.ErrPresignedExpired) {
 			metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonTimeSkew).Inc()
 			slog.Debug("auth failure: presigned URL expired",
 				"client_ip", clientIP,
@@ -598,10 +603,10 @@ func handlePresignedAuth(w http.ResponseWriter, r *http.Request, cfg *config.Con
 				"access_key_id", accessKeyID,
 				"error", err,
 			)
-			s3.WriteErrorResponse(w, s3.ErrExpiredToken)
+			s3.WriteErrorResponseMessage(w, s3.ErrAccessDenied, "Request has expired")
 			return
 		}
-		if strings.Contains(err.Error(), "future") {
+		if errors.Is(err, auth.ErrPresignedFuture) {
 			metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonTimeSkew).Inc()
 			slog.Debug("auth failure: presigned URL time in future",
 				"client_ip", clientIP,
@@ -611,7 +616,20 @@ func handlePresignedAuth(w http.ResponseWriter, r *http.Request, cfg *config.Con
 				"access_key_id", accessKeyID,
 				"error", err,
 			)
-			s3.WriteErrorResponse(w, s3.ErrRequestTimeTooSkewed)
+			s3.WriteErrorResponseMessage(w, s3.ErrAccessDenied, "Request is not valid yet")
+			return
+		}
+		if errors.Is(err, auth.ErrMalformedPresigned) {
+			metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonMalformedHeader).Inc()
+			slog.Debug("auth failure: malformed presigned URL",
+				"client_ip", clientIP,
+				"request_id", GetRequestID(r),
+				"method", r.Method,
+				"path", r.URL.Path,
+				"access_key_id", accessKeyID,
+				"error", err,
+			)
+			s3.WriteErrorResponse(w, s3.ErrAuthorizationQueryParametersError)
 			return
 		}
 		metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonSignatureMismatch).Inc()

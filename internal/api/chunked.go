@@ -23,7 +23,12 @@ const maxChunkLineLength = 4096
 
 // errChunkLineTooLong is returned when a chunk header or trailer line is
 // longer than maxChunkLineLength
-var errChunkLineTooLong = errors.New("aws-chunked line too long")
+var errChunkLineTooLong = fmt.Errorf("%w: line too long", errMalformedChunk)
+
+// errMalformedChunk is wrapped by every error for an aws-chunked body that
+// does not follow the encoding, so that handlers can report it as a client
+// error rather than an internal one.
+var errMalformedChunk = errors.New("malformed aws-chunked body")
 
 // awsChunkedReader decodes AWS chunked transfer encoding
 // Format: <hex-size>;chunk-signature=<sig>\r\n<data>\r\n...0;chunk-signature=<sig>\r\n[<trailers>]\r\n
@@ -156,7 +161,7 @@ func (r *awsChunkedReader) readChunkHeader() (int64, error) {
 	// Split on semicolon to get size part
 	parts := strings.SplitN(line, ";", 2)
 	if len(parts) == 0 {
-		return 0, fmt.Errorf("invalid chunk header")
+		return 0, fmt.Errorf("%w: invalid chunk header", errMalformedChunk)
 	}
 	r.chunkSignature = ""
 	if len(parts) == 2 {
@@ -171,15 +176,15 @@ func (r *awsChunkedReader) readChunkHeader() (int64, error) {
 
 	size, err := strconv.ParseInt(parts[0], 16, 64)
 	if err != nil {
-		return 0, fmt.Errorf("invalid chunk size: %w", err)
+		return 0, fmt.Errorf("%w: invalid chunk size: %w", errMalformedChunk, err)
 	}
 
 	// Validate chunk size to prevent overflow and bypass of size limits
 	if size < 0 {
-		return 0, fmt.Errorf("invalid chunk size: negative value")
+		return 0, fmt.Errorf("%w: invalid chunk size: negative value", errMalformedChunk)
 	}
 	if r.maxChunkSize > 0 && size > r.maxChunkSize {
-		return 0, fmt.Errorf("invalid chunk size: exceeds maximum allowed (%d > %d)", size, r.maxChunkSize)
+		return 0, fmt.Errorf("%w: invalid chunk size: exceeds maximum allowed (%d > %d)", errMalformedChunk, size, r.maxChunkSize)
 	}
 
 	return size, nil
@@ -213,7 +218,7 @@ func (r *awsChunkedReader) readTrailers() error {
 			return r.verifyTrailers(signed.String())
 		}
 	}
-	return fmt.Errorf("too many trailer lines")
+	return fmt.Errorf("%w: too many trailer lines", errMalformedChunk)
 }
 
 // trailerSignatureName is the trailer that signs the other trailers

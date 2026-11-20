@@ -30,8 +30,11 @@ FUZZ_AUTH = FuzzParseAuthorization FuzzParsePresignedURL FuzzURIEncode \
 	FuzzBuildCanonicalQueryStringMultiple FuzzGetPresignedAccessKeyID \
 	FuzzBuildCanonicalHeaders
 FUZZ_API = FuzzAWSChunkedReader FuzzRangeRequest FuzzConditionalHeaders \
-	FuzzDeleteObjectsBody FuzzCompleteMultipartUploadBody
-FUZZ_STORAGE = FuzzValidateBucketName FuzzKeyToPath FuzzUploadDir
+	FuzzDeleteObjectsBody FuzzCompleteMultipartUploadBody \
+	FuzzSignedAWSChunkedReader FuzzExtractMetadata FuzzRedactedRequestURI \
+	FuzzCopySource
+FUZZ_STORAGE = FuzzValidateBucketName FuzzKeyToPath FuzzUploadDir \
+	FuzzListObjects
 
 fuzz_pkg = $(if $(filter $(1),$(FUZZ_AUTH)),./internal/auth/,$(if $(filter $(1),$(FUZZ_API)),./internal/api/,$(if $(filter $(1),$(FUZZ_STORAGE)),./internal/storage/,$(error unknown fuzz target $(1)))))
 

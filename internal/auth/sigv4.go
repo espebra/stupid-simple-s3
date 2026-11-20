@@ -39,6 +39,11 @@ var (
 	ErrDateMismatch         = errors.New("date mismatch between Authorization and X-Amz-Date")
 	ErrInvalidIPHeader      = errors.New("invalid IP address in a signed IP header")
 	ErrSignatureMismatch    = errors.New("signature mismatch")
+	ErrPresignedExpired     = errors.New("presigned URL has expired")
+	ErrPresignedFuture      = errors.New("request time is in the future")
+	// ErrMalformedPresigned is wrapped by every error for presigned URL
+	// query parameters that are missing or malformed
+	ErrMalformedPresigned = errors.New("malformed presigned URL")
 )
 
 // SignatureV4 handles AWS Signature Version 4 verification. The zero value
@@ -501,19 +506,19 @@ func (s *SignatureV4) ParsePresignedURL(r *http.Request) (*ParsedPresignedURL, e
 	// Check algorithm
 	algorithm := query.Get("X-Amz-Algorithm")
 	if algorithm != Algorithm {
-		return nil, fmt.Errorf("invalid algorithm: %s", algorithm)
+		return nil, fmt.Errorf("%w: invalid algorithm: %s", ErrMalformedPresigned, algorithm)
 	}
 
 	// Parse credential: access-key/date/region/s3/aws4_request
 	credential := query.Get("X-Amz-Credential")
 	credParts := strings.Split(credential, "/")
 	if len(credParts) != 5 || credParts[4] != "aws4_request" {
-		return nil, fmt.Errorf("invalid credential format")
+		return nil, fmt.Errorf("%w: invalid credential format", ErrMalformedPresigned)
 	}
 	// Validate no empty parts in credential
 	for i, part := range credParts {
 		if part == "" {
-			return nil, fmt.Errorf("invalid credential format: empty component at position %d", i)
+			return nil, fmt.Errorf("%w: invalid credential format: empty component at position %d", ErrMalformedPresigned, i)
 		}
 	}
 
@@ -521,37 +526,37 @@ func (s *SignatureV4) ParsePresignedURL(r *http.Request) (*ParsedPresignedURL, e
 	expiresStr := query.Get("X-Amz-Expires")
 	expires, err := strconv.Atoi(expiresStr)
 	if err != nil || expires <= 0 {
-		return nil, fmt.Errorf("invalid expires value")
+		return nil, fmt.Errorf("%w: invalid expires value", ErrMalformedPresigned)
 	}
 	if expires > MaxPresignedExpiry {
-		return nil, fmt.Errorf("expires exceeds maximum allowed value")
+		return nil, fmt.Errorf("%w: expires exceeds maximum allowed value", ErrMalformedPresigned)
 	}
 
 	// Get date
 	amzDate := query.Get("X-Amz-Date")
 	if amzDate == "" {
-		return nil, fmt.Errorf("missing X-Amz-Date")
+		return nil, fmt.Errorf("%w: missing X-Amz-Date", ErrMalformedPresigned)
 	}
 
 	// Get signed headers
 	signedHeadersStr := query.Get("X-Amz-SignedHeaders")
 	if signedHeadersStr == "" {
-		return nil, fmt.Errorf("missing X-Amz-SignedHeaders")
+		return nil, fmt.Errorf("%w: missing X-Amz-SignedHeaders", ErrMalformedPresigned)
 	}
 	signedHeaders := strings.Split(signedHeadersStr, ";")
 
 	// Get signature
 	signature := query.Get("X-Amz-Signature")
 	if signature == "" {
-		return nil, fmt.Errorf("missing X-Amz-Signature")
+		return nil, fmt.Errorf("%w: missing X-Amz-Signature", ErrMalformedPresigned)
 	}
 	// Validate signature is 64-character hex string (SHA256-HMAC = 256 bits = 64 hex chars)
 	if len(signature) != 64 {
-		return nil, fmt.Errorf("invalid X-Amz-Signature length: expected 64, got %d", len(signature))
+		return nil, fmt.Errorf("%w: invalid X-Amz-Signature length: expected 64, got %d", ErrMalformedPresigned, len(signature))
 	}
 	for _, c := range signature {
 		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
-			return nil, fmt.Errorf("invalid X-Amz-Signature: not a valid hex string")
+			return nil, fmt.Errorf("%w: invalid X-Amz-Signature: not a valid hex string", ErrMalformedPresigned)
 		}
 	}
 
@@ -578,24 +583,24 @@ func (s *SignatureV4) VerifyPresignedRequest(r *http.Request, secretKey string) 
 	// Parse and validate timestamp
 	requestTime, err := time.Parse(TimeFormat, parsed.AmzDate)
 	if err != nil {
-		return nil, fmt.Errorf("invalid X-Amz-Date format: %w", err)
+		return nil, fmt.Errorf("%w: invalid X-Amz-Date format: %w", ErrMalformedPresigned, err)
 	}
 
 	// Verify date in credential matches X-Amz-Date
 	if parsed.Date != requestTime.Format(DateFormat) {
-		return nil, fmt.Errorf("date mismatch between credential and X-Amz-Date")
+		return nil, fmt.Errorf("%w: date mismatch between credential and X-Amz-Date", ErrMalformedPresigned)
 	}
 
 	// Check if the presigned URL has expired
 	now := time.Now().UTC()
 	expiryTime := requestTime.Add(time.Duration(parsed.Expires) * time.Second)
 	if now.After(expiryTime) {
-		return nil, fmt.Errorf("presigned URL has expired")
+		return nil, ErrPresignedExpired
 	}
 
 	// Check if the request time is in the future (with some tolerance)
 	if requestTime.After(now.Add(MaxClockSkew)) {
-		return nil, fmt.Errorf("request time is in the future")
+		return nil, ErrPresignedFuture
 	}
 
 	// Build canonical request for presigned URL
