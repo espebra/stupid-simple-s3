@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -421,7 +422,7 @@ func (fs *FilesystemStorage) hasSymlinkBelowBase(objPath string) bool {
 func createObjectDir(objPath string) error {
 	shardPath := filepath.Dir(objPath)
 	var err error
-	for range 3 {
+	for range createObjectDirAttempts {
 		// Only DeleteBucket removes the objects directory, so failing to
 		// create a shard directory inside it means the bucket is gone or
 		// being deleted.
@@ -440,9 +441,21 @@ func createObjectDir(objPath string) error {
 		if !isMissingDirError(err) {
 			break
 		}
+		// Let the goroutine that removed the shard finish before trying
+		// again, so that writes and deletes in the same shard do not keep
+		// interleaving the same way.
+		runtime.Gosched()
 	}
 	return fmt.Errorf("creating object directory: %w", err)
 }
+
+// createObjectDirAttempts is how many times createObjectDir tries to create
+// an object directory whose shard directory was removed by a concurrent
+// DeleteObject. Each failed attempt means another delete emptied and removed
+// the shard, so under contention a handful of attempts is not enough: with
+// four writers and four deleters on one key, three attempts failed about
+// once in ten runs of TestConcurrentPutAndDeleteSameKey on macOS.
+const createObjectDirAttempts = 100
 
 // isMissingDirError reports whether a Mkdir failed because its parent
 // directory does not exist or is being removed. Creating a directory inside

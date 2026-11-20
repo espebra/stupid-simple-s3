@@ -588,7 +588,7 @@ func handlePresignedAuth(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	if err != nil {
 		time.Sleep(authFailureDelay)
 		// Check for specific error types
-		if strings.Contains(err.Error(), "expired") {
+		if errors.Is(err, auth.ErrPresignedExpired) {
 			metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonTimeSkew).Inc()
 			slog.Debug("auth failure: presigned URL expired",
 				"client_ip", clientIP,
@@ -601,7 +601,7 @@ func handlePresignedAuth(w http.ResponseWriter, r *http.Request, cfg *config.Con
 			s3.WriteErrorResponse(w, s3.ErrExpiredToken)
 			return
 		}
-		if strings.Contains(err.Error(), "future") {
+		if errors.Is(err, auth.ErrPresignedFuture) {
 			metrics.AuthFailuresTotal.WithLabelValues(metrics.AuthReasonTimeSkew).Inc()
 			slog.Debug("auth failure: presigned URL time in future",
 				"client_ip", clientIP,

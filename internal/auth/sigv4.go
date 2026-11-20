@@ -39,6 +39,8 @@ var (
 	ErrDateMismatch         = errors.New("date mismatch between Authorization and X-Amz-Date")
 	ErrInvalidIPHeader      = errors.New("invalid IP address in a signed IP header")
 	ErrSignatureMismatch    = errors.New("signature mismatch")
+	ErrPresignedExpired     = errors.New("presigned URL has expired")
+	ErrPresignedFuture      = errors.New("request time is in the future")
 )
 
 // SignatureV4 handles AWS Signature Version 4 verification. The zero value
@@ -590,12 +592,12 @@ func (s *SignatureV4) VerifyPresignedRequest(r *http.Request, secretKey string) 
 	now := time.Now().UTC()
 	expiryTime := requestTime.Add(time.Duration(parsed.Expires) * time.Second)
 	if now.After(expiryTime) {
-		return nil, fmt.Errorf("presigned URL has expired")
+		return nil, ErrPresignedExpired
 	}
 
 	// Check if the request time is in the future (with some tolerance)
 	if requestTime.After(now.Add(MaxClockSkew)) {
-		return nil, fmt.Errorf("request time is in the future")
+		return nil, ErrPresignedFuture
 	}
 
 	// Build canonical request for presigned URL
