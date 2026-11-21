@@ -26,7 +26,6 @@ const (
 	credentialContextKey contextKey = "credential"
 	// chunkVerifierContextKey holds the *auth.ChunkVerifier of a signed aws-chunked upload
 	chunkVerifierContextKey contextKey = "chunk-verifier"
-	operationContextKey     contextKey = "operation"
 	requestIDContextKey     contextKey = "request_id"
 )
 
@@ -192,7 +191,7 @@ func MetricsMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(rw, r)
 
 		duration := time.Since(start).Seconds()
-		operation := getOperationFromContext(r)
+		operation := detectOperation(r)
 		status := strconv.Itoa(rw.statusCode)
 
 		metrics.RequestsTotal.WithLabelValues(r.Method, operation, status).Inc()
@@ -252,7 +251,7 @@ func accessLogMiddleware(trustedProxies []string, isInternal func(path string) b
 				return
 			}
 
-			operation := getOperationFromContext(r)
+			operation := detectOperation(r)
 
 			attrs := []slog.Attr{
 				slog.String("client_ip", clientIP),
@@ -334,23 +333,6 @@ func getClientIPWithTrust(r *http.Request, checker *trustedProxyChecker) string 
 	}
 
 	return remoteIP
-}
-
-// SetOperation middleware sets the operation name in the request context
-func SetOperation(operation string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := context.WithValue(r.Context(), operationContextKey, operation)
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
-	}
-}
-
-func getOperationFromContext(r *http.Request) string {
-	if op, ok := r.Context().Value(operationContextKey).(string); ok {
-		return op
-	}
-	return detectOperation(r)
 }
 
 // isBucketPath reports whether a request path addresses a bucket rather than

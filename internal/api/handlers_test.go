@@ -2630,7 +2630,13 @@ func TestRouting(t *testing.T) {
 		{"GET", "//key", http.StatusNotFound},
 		{"PATCH", "/test-bucket/key", http.StatusMethodNotAllowed},
 		{"OPTIONS", "/test-bucket", http.StatusMethodNotAllowed},
+		// Health checks and common browser paths skip authentication
 		{"GET", "/healthz", http.StatusOK},
+		{"GET", "/readyz", http.StatusOK},
+		{"GET", "/favicon.ico", http.StatusNotFound},
+		{"GET", "/robots.txt", http.StatusNotFound},
+		{"GET", "/apple-touch-icon.png", http.StatusNotFound},
+		{"GET", "/apple-touch-icon-precomposed.png", http.StatusNotFound},
 	} {
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, httptest.NewRequest(tc.method, tc.path, nil))
