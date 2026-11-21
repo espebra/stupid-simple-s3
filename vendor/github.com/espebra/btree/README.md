@@ -15,3 +15,21 @@ act as a drop-in replacement for gollrb trees.
 This is a fork of https://github.com/google/btree.
 
 See https://pkg.go.dev/github.com/espebra/btree for documentation.
+
+## Releasing
+
+Releases are cut by pushing a tag of the form `vX.Y.Z` on a commit that is on
+`master`:
+
+```sh
+git checkout master && git pull
+git tag -a v1.2.3 -m v1.2.3
+git push origin v1.2.3
+```
+
+The [Release workflow](.github/workflows/release.yml) then checks the tag,
+runs the full test workflow on the tagged commit, and, if everything passes,
+creates a GitHub release with generated notes and publishes the version to the
+Go module proxy. Tags with pre-release suffixes (`-rc.1`) are rejected, and
+v2 and later need the module path in `go.mod` to end in `/v2` and so on, as Go
+requires.
