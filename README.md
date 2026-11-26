@@ -13,9 +13,16 @@ A minimal S3-compatible object storage service in Go. Designed for single-server
 - Read-only and read-write S3 credentials.
 - Multi-bucket support via S3 CreateBucket/DeleteBucket API.
 - Presigned URL support for temporary access.
-- Multipart upload support.
+- Multipart upload support, with periodic cleanup of abandoned uploads.
+- aws-chunked uploads, with every chunk signature and the trailer signature verified.
+- CopyObject and batch DeleteObjects.
+- Range requests, and conditional requests (`If-Match`, `If-None-Match`, `If-Modified-Since`, `If-Unmodified-Since`).
+- Conditional writes (`If-None-Match: *`, `If-Match: <etag>`), usable as compare-and-swap.
+- User metadata (`x-amz-meta-*` headers).
 - SHA-256 checksums (`x-amz-checksum-sha256`) verified on upload and returned on download.
-- Prometheus metrics endpoint on a separate listener with optional basic auth.
+- Key-ordered listings (ListObjects and ListObjectsV2) served from an in-memory index.
+- Health check endpoints for liveness and readiness probes.
+- Prometheus metrics endpoint on a separate listener with optional basic auth, and optional pprof profiling.
 - Few external dependencies.
 
 Note that Stupid Simple S3 is HTTP only. TLS support needs to be provided by a separate TLS proxy.
@@ -185,6 +192,8 @@ Presigned URL parameters:
 - Maximum expiry time: 7 days (604800 seconds)
 - Supported operations: GET (download), PUT (upload), HEAD, DELETE
 
+Presigned GET requests can override response headers with the `response-content-type`, `response-content-disposition` and `response-cache-control` query parameters, for example to make a browser download an object under a given file name. The overrides are part of the signed URL and are ignored on requests that are not presigned.
+
 The access log replaces the values of all `X-Amz-*` query parameters with `REDACTED`, so presigned URLs found in the logs cannot be used.
 
 ## Checksums and ETags
@@ -244,6 +253,8 @@ ETags are derived from the same digests: `"sha256-<hex>"` for objects and parts,
 | ListParts | GET | `/{bucket}/{key}?uploadId=X` |
 
 Notes:
+- ListBuckets (`GET /`) is not supported, so commands that list all buckets, such as `aws s3 ls` without a bucket, fail with `404`.
+- PutObject, CopyObject (with `REPLACE`) and CreateMultipartUpload store user metadata from `x-amz-meta-*` headers, which GetObject and HeadObject return. Metadata names may only contain lowercase letters, digits and hyphens, and values must be printable ASCII; other metadata is rejected with `400 InvalidArgument`.
 - GetBucketLocation returns an empty location constraint, which S3 clients read as `us-east-1`. The service has no regions.
 - As in S3, every part of a multipart upload except the last must be at least 5 MiB. CompleteMultipartUpload fails with `EntityTooSmall` otherwise.
 - ListMultipartUploads supports `prefix`, `key-marker`, `upload-id-marker` and `max-uploads`. `delimiter` is ignored.
@@ -334,6 +345,8 @@ spec:
   podMetricsEndpoints:
     - port: metrics
 ```
+
+A Grafana dashboard for these metrics is included in [`grafana-dashboard.json`](grafana-dashboard.json) and can be imported from Grafana's *Dashboards → Import* page.
 
 ## Profiling with pprof
 
@@ -462,7 +475,13 @@ go test -bench=. -benchmem ./...
 
 # Run fuzz tests
 make fuzz
+
+# Run a soak test (1 hour by default)
+make soak
+SOAK_DURATION=8h make soak
 ```
+
+The soak test runs a mixed workload covering every supported operation against a freshly built server. It checks that every object reads back exactly as written, and that the server leaks no goroutines, file descriptors, memory, temp files or multipart uploads. See `tests/soak/main.go` for its flags, which can be passed with `SOAK_FLAGS`.
 
 ## License
 
